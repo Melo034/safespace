@@ -1,7 +1,5 @@
-import { Menu, ChevronRight, MessageCircleQuestion } from "lucide-react";
+import { Menu, MessageCircleQuestion } from "lucide-react";
 import { useState, useEffect } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import {
     Accordion,
     AccordionContent,
@@ -9,7 +7,6 @@ import {
     AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator"
 import {
     NavigationMenu,
     NavigationMenuContent,
@@ -149,17 +146,6 @@ const Navbar = ({
                                         </a>
                                     </SheetTitle>
                                 </SheetHeader>
-                                <Card className="border-none shadow-none">
-                                    <CardContent className="flex flex-col items-center text-center">
-                                        <Avatar className="w-20 h-20">
-                                            <AvatarImage src="/path-to-image.jpg" alt="Joseph Melvin Kanu" />
-                                            <AvatarFallback>JM</AvatarFallback>
-                                        </Avatar>
-                                        <h2 className="mt-2 text-sm sm:text-lg font-Lora font-semibold">Joseph Melvin Kanu</h2>
-                                        <a href="/my-profile"><Button variant="link" >Profile <ChevronRight size={16} /></Button></a>
-                                    </CardContent>
-                                </Card>
-                                <Separator />
                                 <div className="flex flex-col gap-6 p-4">
                                     <Accordion
                                         type="single"
