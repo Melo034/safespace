@@ -1,5 +1,5 @@
 import { Shield, MessageCircle, DollarSign } from "lucide-react"
-import SpotlightCard from './SportLightCard';
+import SpotlightCard from './SportlightCard';
 
 
 const cardData = [
