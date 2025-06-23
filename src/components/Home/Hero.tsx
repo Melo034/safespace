@@ -7,7 +7,7 @@ const Hero = () => {
     <div className="relative overflow-hidden">
       {/* Hero Content */}
       <div className="px-4 py-10 md:py-20">
-        <div className="container max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-12 md:flex-row">
+        <div className="container max-w-7xl mx-auto flex flex-col items-center justify-between gap-12 md:flex-row">
 
           {/* Text Section */}
           <div className="w-full md:basis-1/2 text-center md:text-left">
