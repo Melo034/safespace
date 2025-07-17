@@ -1,4 +1,4 @@
-import { Menu, MessageCircleQuestion } from "lucide-react";
+import { Menu } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
     Accordion,
@@ -49,6 +49,10 @@ interface NavbarProps {
             text: string;
             url: string;
         };
+        community?: {
+            text: string;   
+            url: string;
+        };
     };
 }
 
@@ -76,20 +80,18 @@ const Navbar = ({
 
         },
         {
+            title: "Stories",
+            url: "/stories",
+
+        },
+        {
             title: "About",
             url: "#",
-            items: [
-                {
-                    title: "How it works",
-                    description: "Step-by-step help, examples, and more",
-                    icon: <MessageCircleQuestion className="size-5 shrink-0" />,
-                    url: "/how-it-works",
-                },
-            ],
         },
     ],
     auth = {
         login: { text: "Log in", url: "/login" },
+        community: { text: "Join the Community", url: "/community"}
     },
 }: NavbarProps) => {
     const [hasScrolled, setHasScrolled] = useState(false);
@@ -121,6 +123,11 @@ const Navbar = ({
                         </div>
                     </div>
                     <div className="flex gap-2 font-pt-serif">
+                        {auth.community && (
+                            <Button asChild size="sm" variant="outline">
+                                <a href={auth.community.url}>{auth.community.text}</a>
+                            </Button>
+                        )}
                         <Button asChild size="sm">
                             <a href={auth.login.url}>{auth.login.text}</a>
                         </Button>
@@ -156,6 +163,11 @@ const Navbar = ({
                                     </Accordion>
 
                                     <div className="flex flex-col gap-3">
+                                        {auth.community && (
+                                            <Button asChild size="sm" variant="outline">
+                                                <a href={auth.community.url}>{auth.community.text}</a>
+                                            </Button>
+                                        )}
                                         <Button asChild>
                                             <a href={auth.login.url}>{auth.login.text}</a>
                                         </Button>

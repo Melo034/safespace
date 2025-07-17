@@ -47,7 +47,9 @@ const Signin = ({
                                 <Input id="password" type="password" required />
                             </div>
                             <Button type="submit">
-                                Login
+                                <Link to="/admin-dashboard" className="flex items-center gap-2">
+                                 Login
+                                 </Link>
                             </Button>
                         </div>
                     </form>
