@@ -1,567 +1,632 @@
-import { useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Navbar } from "@/components/utils/Navbar"
-import { Footer } from "@/components/utils/Footer"
-import {
-    Heart, MessageCircle, Share2, User, Clock, Filter,
-    Plus, Award, ThumbsUp, Eye, Shield
-} from "lucide-react"
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import supabase from "@/server/supabase";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Clock, Eye, Heart, MessageCircle, Shield, ThumbsUp, Search as SearchIcon, Sparkles } from "lucide-react";
+import { toast } from "sonner";
+import { formatDistanceToNow, parseISO } from "date-fns";
+import type { PostgrestError } from "@supabase/supabase-js";
 
-// Mock data for stories
-const mockStories = [
-    {
-        id: "STY-001",
-        title: "Finding My Voice: A Journey to Healing",
-        content: "Two years ago, I thought I would never be able to speak about what happened to me. The fear, shame, and trauma felt insurmountable. But with the help of an incredible therapist and the support of this community, I've found my voice again...",
-        fullContent: "Two years ago, I thought I would never be able to speak about what happened to me. The fear, shame, and trauma felt insurmountable. But with the help of an incredible therapist and the support of this community, I've found my voice again. Today, I stand as a survivor, not a victim. My journey wasn't easy - there were dark days when getting out of bed felt impossible. But slowly, with professional help and the love of family and friends, I began to heal. I learned that healing isn't linear, and that's okay. Some days are harder than others, but I've learned to be gentle with myself. To anyone reading this who is still in the midst of their struggle - you are not alone. Your voice matters. Your story matters. And most importantly, you matter.",
-        author: {
-            name: "Sarah M.",
-            anonymous: false,
-            avatar: "https://images.unsplash.com/photo-1494790108755-2616b612b77c?w=150&h=150&fit=crop&crop=face",
-            isVerified: true
-        },
-        timestamp: "2024-01-10",
-        category: "healing",
-        likes: 156,
-        comments: 23,
-        views: 892,
-        tags: ["healing", "therapy", "community"],
-        featured: true
-    },
-    {
-        id: "STY-002",
-        title: "Breaking the Cycle: How I Escaped",
-        content: "For three years, I lived in fear. Every day was a battle between hope and despair. I want to share my story not for sympathy, but to show others that there is a way out...",
-        fullContent: "For three years, I lived in fear. Every day was a battle between hope and despair. I want to share my story not for sympathy, but to show others that there is a way out. The hardest part wasn't the physical abuse - it was believing I deserved better. The psychological manipulation made me question my own reality. But one day, I met a woman at the grocery store who noticed my bruises and quietly handed me a card for a domestic violence shelter. That small act of kindness changed everything. It took me six months to finally call the number, but when I did, they helped me create a safety plan. The day I left was the scariest and most liberating day of my life. Today, I have my own apartment, a new job, and most importantly, my freedom. If you're reading this and you're scared to leave - please know that help is available. You deserve love, not fear.",
-        author: {
-            name: "Anonymous",
-            anonymous: true,
-            avatar: null,
-            isVerified: false
-        },
-        timestamp: "2024-01-08",
-        category: "escape",
-        likes: 289,
-        comments: 41,
-        views: 1247,
-        tags: ["domestic-violence", "escape", "shelter"],
-        featured: true
-    },
-    {
-        id: "STY-003",
-        title: "Supporting My Sister Through Her Journey",
-        content: "When my sister finally told me what she was going through, I felt helpless. I didn't know how to support her without making things worse. Here's what I learned about being a supportive family member...",
-        fullContent: "When my sister finally told me what she was going through, I felt helpless. I didn't know how to support her without making things worse. Here's what I learned about being a supportive family member to a survivor of domestic violence. First, I had to let go of my need to 'fix' everything. My sister didn't need me to solve her problems - she needed me to listen without judgment. I learned about trauma responses and why she sometimes seemed to defend her abuser. I educated myself about the cycle of abuse and why leaving isn't always easy or safe. Most importantly, I learned to follow her lead. Some days she wanted to talk, other days she needed distraction. I made sure she knew I was always available, but I didn't pressure her. When she was ready to leave, I helped her create a safety plan and offered my home as a safe space. To other family members and friends - your support matters more than you know. Sometimes just knowing someone believes in you can make all the difference.",
-        author: {
-            name: "Marcus R.",
-            anonymous: false,
-            avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=face",
-            isVerified: false
-        },
-        timestamp: "2024-01-05",
-        category: "support",
-        likes: 124,
-        comments: 18,
-        views: 567,
-        tags: ["family-support", "allies", "education"],
-        featured: false
-    },
-    {
-        id: "STY-004",
-        title: "Rebuilding After Trauma: My Professional Journey",
-        content: "Returning to work after experiencing trauma was one of the biggest challenges I faced. The panic attacks, the inability to concentrate, the fear of judgment from colleagues...",
-        fullContent: "Returning to work after experiencing trauma was one of the biggest challenges I faced. The panic attacks, the inability to concentrate, the fear of judgment from colleagues - it all felt overwhelming. I was lucky to have an understanding HR department and a manager who supported my need for flexibility during my healing process. I started with part-time hours and gradually increased them as I felt stronger. Therapy helped me develop coping strategies for managing triggers in the workplace. I also connected with an employee resource group that provided additional support. It's been two years since I returned to work full-time, and I'm now in a leadership position where I can help create policies that support other survivors in the workplace. My advice to other survivors: don't rush your healing process, but also don't let trauma define your entire future. You are capable of so much more than you might believe right now.",
-        author: {
-            name: "Dr. Jennifer K.",
-            anonymous: false,
-            avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&h=150&fit=crop&crop=face",
-            isVerified: true
-        },
-        timestamp: "2024-01-03",
-        category: "recovery",
-        likes: 98,
-        comments: 15,
-        views: 423,
-        tags: ["workplace", "recovery", "leadership"],
-        featured: false
-    }
-]
+type UiStory = {
+  id: string;
+  title: string;
+  content: string;          // preview text
+  full_content: string;     // full text
+  author: {
+    id: string | null;
+    name: string;
+    anonymous: boolean;
+    avatar: string | null;
+    verified: boolean;
+  };
+  created_at: string;
+  category: "healing" | "escape" | "support" | "recovery" | "awareness" | "general";
+  likes: number;
+  is_liked: boolean;
+  comments_count: number;
+  views: number;
+  tags: string[];
+  featured: boolean;
+};
 
-const Stories = () => {
-    const [stories, setStories] = useState(mockStories)
-    const [searchTerm, setSearchTerm] = useState("")
-    const [categoryFilter, setCategoryFilter] = useState("all")
-    const [sortBy, setSortBy] = useState("recent")
-    const [expandedStory, setExpandedStory] = useState<string | null>(null)
-    const [showAddStory, setShowAddStory] = useState(false)
-    const [newStory, setNewStory] = useState({
-        title: "",
-        content: "",
-        category: "",
-        anonymous: false,
-        authorName: ""
-    })
+type DbStory = {
+  id: string;
+  title: string | null;
+  content: string | null;
+  author_id: string | null;
+  created_at: string | null;
+  tags: string[] | null;
+};
 
-    const filteredStories = stories.filter(story => {
-        const matchesSearch = story.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            story.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            story.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
-
-        const matchesCategory = categoryFilter === "all" || story.category === categoryFilter
-
-        return matchesSearch && matchesCategory
-    }).sort((a, b) => {
-        switch (sortBy) {
-            case "popular":
-                return b.likes - a.likes
-            case "discussed":
-                return b.comments - a.comments
-            case "recent":
-            default:
-                return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        }
-    })
-
-    const handleLike = (storyId: string) => {
-        setStories(stories.map(story =>
-            story.id === storyId
-                ? { ...story, likes: story.likes + 1 }
-                : story
-        ))
-    }
-
-    const handleAddStory = () => {
-        const story = {
-            id: `STY-${String(stories.length + 1).padStart(3, '0')}`,
-            title: newStory.title,
-            content: newStory.content.substring(0, 200) + "...",
-            fullContent: newStory.content,
-            author: {
-                name: newStory.anonymous ? "Anonymous" : newStory.authorName,
-                anonymous: newStory.anonymous,
-                avatar: null,
-                isVerified: false
-            },
-            timestamp: new Date().toISOString().split('T')[0],
-            category: newStory.category,
-            likes: 0,
-            comments: 0,
-            views: 0,
-            tags: [],
-            featured: false
-        }
-
-        setStories([story, ...stories])
-        setNewStory({
-            title: "",
-            content: "",
-            category: "",
-            anonymous: false,
-            authorName: ""
-        })
-        setShowAddStory(false)
-    }
-
-    return (
-        <div className="min-h-screen bg-background">
-            <Navbar />
-
-            <main className="container mx-auto px-4 py-8">
-                {/* Header */}
-                <div className="max-w-4xl mx-auto text-center mb-12">
-                    <h1 className="text-4xl md:text-5xl font-bold text-foreground mb-4">
-                        Survivor Stories
-                    </h1>
-                    <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-                        A safe space to share experiences, find hope, and connect with others
-                        on similar journeys of healing and recovery.
-                    </p>
-                </div>
+type StoryCardProps =
+  | { story: UiStory; storyId?: never }
+  | { story?: never; storyId: string };
 
 
-                {/* Featured Stories */}
-                {stories.some(s => s.featured) && (
-                    <div className="max-w-6xl mx-auto mb-12">
-                        <h2 className="text-2xl font-bold text-foreground mb-6 flex items-center space-x-2">
-                            <Award className="h-6 w-6 text-primary" />
-                            <span>Featured Stories</span>
-                        </h2>
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            {stories.filter(s => s.featured).slice(0, 2).map(story => (
-                                <Card key={story.id} className="border-2 border-rose-200 hover:shadow-lg transition-all duration-300">
-                                    <CardHeader>
-                                        <div className="flex items-start justify-between">
-                                            <div className="flex items-center space-x-3">
-                                                {story.author.avatar ? (
-                                                    <Avatar className="h-10 w-10">
-                                                        <AvatarImage src={story.author.avatar} alt={story.author.name} />
-                                                        <AvatarFallback><User className="h-5 w-5" /></AvatarFallback>
-                                                    </Avatar>
-                                                ) : (
-                                                    <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
-                                                        {story.author.anonymous ? <Shield className="h-5 w-5" /> : <User className="h-5 w-5" />}
-                                                    </div>
-                                                )}
-                                                <div>
-                                                    <div className="flex items-center space-x-2">
-                                                        <p className="font-semibold text-sm">{story.author.name}</p>
-                                                        {story.author.isVerified && <Badge className="text-xs test-red-800">Verified</Badge>}
-                                                    </div>
-                                                    <div className="flex items-center space-x-2 text-xs text-muted-foreground">
-                                                        <Clock className="h-3 w-3" />
-                                                        <span>{new Date(story.timestamp).toLocaleDateString()}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <Badge variant="secondary">Featured</Badge>
-                                        </div>
-                                        <CardTitle className="text-lg hover:text-primary transition-colors cursor-pointer">
-                                            {story.title}
-                                        </CardTitle>
-                                        <div className="flex items-center space-x-2">
-                                            <Badge variant="outline" className="text-xs">
-                                                {story.category.replace('-', ' ')}
-                                            </Badge>
-                                        </div>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <CardDescription className="mb-4 leading-relaxed">
-                                            {expandedStory === story.id ? story.fullContent : story.content}
-                                        </CardDescription>
+const CATEGORIES = ["healing", "escape", "support", "recovery", "awareness"] as const;
 
-                                        <div className="flex flex-wrap gap-1 mb-4">
-                                            {story.tags.map(tag => (
-                                                <Badge key={tag} variant="secondary" className="text-xs">
-                                                    #{tag.replace('-', '')}
-                                                </Badge>
-                                            ))}
-                                        </div>
-
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center space-x-4 text-sm text-muted-foreground">
-                                                <div className="flex items-center space-x-1">
-                                                    <Heart className="h-4 w-4" />
-                                                    <span>{story.likes}</span>
-                                                </div>
-                                                <div className="flex items-center space-x-1">
-                                                    <MessageCircle className="h-4 w-4" />
-                                                    <span>{story.comments}</span>
-                                                </div>
-                                                <div className="flex items-center space-x-1">
-                                                    <Eye className="h-4 w-4" />
-                                                    <span>{story.views}</span>
-                                                </div>
-                                            </div>
-                                            <div className="flex space-x-2">
-                                                <Button
-                                                    size="sm"
-                                                    variant="outline"
-                                                    onClick={() => setExpandedStory(expandedStory === story.id ? null : story.id)}
-                                                >
-                                                    {expandedStory === story.id ? "Show Less" : "Read More"}
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant="ghost"
-                                                    onClick={() => handleLike(story.id)}
-                                                >
-                                                    <ThumbsUp className="h-4 w-4" />
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Search and Actions */}
-                <div className="max-w-6xl mx-auto mb-8">
-                    <Card>
-                        <CardHeader>
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                                <CardTitle className="flex items-center space-x-2">
-                                    <MessageCircle className="h-5 w-5" />
-                                    <span>Community Stories</span>
-                                </CardTitle>
-                                <Dialog open={showAddStory} onOpenChange={setShowAddStory}>
-                                    <DialogTrigger asChild>
-                                        <Button>
-                                            <Plus className="h-4 w-4 mr-2" />
-                                            Share Your Story
-                                        </Button>
-                                    </DialogTrigger>
-                                    <DialogContent className="max-w-2xl">
-                                        <DialogHeader>
-                                            <DialogTitle>Share Your Story</DialogTitle>
-                                            <DialogDescription>
-                                                Your story can inspire and help others. Share as much or as little as you're comfortable with.
-                                            </DialogDescription>
-                                        </DialogHeader>
-                                        <div className="space-y-4">
-                                            <div className="space-y-2">
-                                                <Label htmlFor="story-title">Story Title</Label>
-                                                <Input
-                                                    id="story-title"
-                                                    placeholder="Give your story a title..."
-                                                    value={newStory.title}
-                                                    onChange={(e) => setNewStory({ ...newStory, title: e.target.value })}
-                                                />
-                                            </div>
-                                            <div className="space-y-2">
-                                                <Label htmlFor="story-category">Category</Label>
-                                                <Select value={newStory.category} onValueChange={(value) => setNewStory({ ...newStory, category: value })}>
-                                                    <SelectTrigger>
-                                                        <SelectValue placeholder="Select a category" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="healing">Healing Journey</SelectItem>
-                                                        <SelectItem value="escape">Escape & Freedom</SelectItem>
-                                                        <SelectItem value="support">Support & Allies</SelectItem>
-                                                        <SelectItem value="recovery">Recovery & Growth</SelectItem>
-                                                        <SelectItem value="awareness">Awareness & Education</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-                                            <div className="space-y-2">
-                                                <Label htmlFor="story-content">Your Story</Label>
-                                                <Textarea
-                                                    id="story-content"
-                                                    placeholder="Share your experience, insights, or message of hope..."
-                                                    className="min-h-[200px]"
-                                                    value={newStory.content}
-                                                    onChange={(e) => setNewStory({ ...newStory, content: e.target.value })}
-                                                />
-                                            </div>
-                                            <div className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id="anonymous"
-                                                    checked={newStory.anonymous}
-                                                    onCheckedChange={(checked) => setNewStory({ ...newStory, anonymous: checked === true })}
-                                                />
-                                                <Label htmlFor="anonymous">Share anonymously</Label>
-                                            </div>
-                                            {!newStory.anonymous && (
-                                                <div className="space-y-2">
-                                                    <Label htmlFor="author-name">Your Name</Label>
-                                                    <Input
-                                                        id="author-name"
-                                                        placeholder="Enter your name or initials"
-                                                        value={newStory.authorName}
-                                                        onChange={(e) => setNewStory({ ...newStory, authorName: e.target.value })}
-                                                    />
-                                                </div>
-                                            )}
-                                            <div className="flex justify-end space-x-2">
-                                                <Button variant="outline" onClick={() => setShowAddStory(false)}>
-                                                    Cancel
-                                                </Button>
-                                                <Button
-                                                    onClick={handleAddStory}
-                                                    disabled={!newStory.title || !newStory.content || !newStory.category || (!newStory.anonymous && !newStory.authorName)}
-                                                >
-                                                    Share Story
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </DialogContent>
-                                </Dialog>
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex flex-col lg:flex-row gap-4">
-                                <div className="flex-1">
-                                    <Input
-                                        placeholder="Search stories by title, content, or tags..."
-                                        value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                        className="w-full"
-                                    />
-                                </div>
-                                <div className="flex gap-2">
-                                    <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                                        <SelectTrigger className="w-48">
-                                            <SelectValue placeholder="Category" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">All Categories</SelectItem>
-                                            <SelectItem value="healing">Healing Journey</SelectItem>
-                                            <SelectItem value="escape">Escape & Freedom</SelectItem>
-                                            <SelectItem value="support">Support & Allies</SelectItem>
-                                            <SelectItem value="recovery">Recovery & Growth</SelectItem>
-                                            <SelectItem value="awareness">Awareness & Education</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    <Select value={sortBy} onValueChange={setSortBy}>
-                                        <SelectTrigger className="w-32">
-                                            <SelectValue placeholder="Sort by" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="recent">Recent</SelectItem>
-                                            <SelectItem value="popular">Most Liked</SelectItem>
-                                            <SelectItem value="discussed">Most Discussed</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-
-
-                {/* All Stories */}
-                <div className="max-w-6xl mx-auto">
-                    <div className="flex items-center justify-between mb-6">
-                        <h2 className="text-2xl font-bold text-foreground">
-                            All Stories ({filteredStories.length})
-                        </h2>
-                    </div>
-
-                    <div className="space-y-6">
-                        {filteredStories.map(story => (
-                            <Card key={story.id} className="hover:shadow-lg transition-all duration-300">
-                                <CardHeader>
-                                    <div className="flex items-start justify-between">
-                                        <div className="flex items-center space-x-3">
-                                            {story.author.avatar ? (
-                                                <Avatar className="h-10 w-10">
-                                                    <AvatarImage src={story.author.avatar} alt={story.author.name} />
-                                                    <AvatarFallback><User className="h-5 w-5" /></AvatarFallback>
-                                                </Avatar>
-                                            ) : (
-                                                <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
-                                                    {story.author.anonymous ? <Shield className="h-5 w-5" /> : <User className="h-5 w-5" />}
-                                                </div>
-                                            )}
-                                            <div>
-                                                <div className="flex items-center space-x-2">
-                                                    <p className="font-semibold text-sm">{story.author.name}</p>
-                                                    {story.author.isVerified && <Badge variant="secondary" className="text-xs">Verified</Badge>}
-                                                </div>
-                                                <div className="flex items-center space-x-2 text-xs text-muted-foreground">
-                                                    <Clock className="h-3 w-3" />
-                                                    <span>{new Date(story.timestamp).toLocaleDateString()}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <Badge variant="outline" className="text-xs">
-                                            {story.category.replace('-', ' ')}
-                                        </Badge>
-                                    </div>
-                                    <CardTitle className="text-xl hover:text-primary transition-colors cursor-pointer">
-                                        {story.title}
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <CardDescription className="mb-4 leading-relaxed text-base">
-                                        {expandedStory === story.id ? story.fullContent : story.content}
-                                    </CardDescription>
-
-                                    {story.tags.length > 0 && (
-                                        <div className="flex flex-wrap gap-1 mb-4">
-                                            {story.tags.map(tag => (
-                                                <Badge key={tag} variant="secondary" className="text-xs">
-                                                    #{tag.replace('-', '')}
-                                                </Badge>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-6 text-sm text-muted-foreground">
-                                            <div className="flex items-center space-x-1">
-                                                <Heart className="h-4 w-4" />
-                                                <span>{story.likes}</span>
-                                            </div>
-                                            <div className="flex items-center space-x-1">
-                                                <MessageCircle className="h-4 w-4" />
-                                                <span>{story.comments}</span>
-                                            </div>
-                                            <div className="flex items-center space-x-1">
-                                                <Eye className="h-4 w-4" />
-                                                <span>{story.views}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex space-x-2">
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => setExpandedStory(expandedStory === story.id ? null : story.id)}
-                                            >
-                                                {expandedStory === story.id ? "Show Less" : "Read More"}
-                                            </Button>
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={() => handleLike(story.id)}
-                                            >
-                                                <ThumbsUp className="h-4 w-4" />
-                                            </Button>
-                                            <Button size="sm" variant="ghost">
-                                                <Share2 className="h-4 w-4" />
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        ))}
-                    </div>
-
-                    {filteredStories.length === 0 && (
-                        <div className="text-center py-12">
-                            <Filter className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                            <h3 className="text-lg font-semibold text-foreground mb-2">No stories found</h3>
-                            <p className="text-muted-foreground">Try adjusting your search terms or filters.</p>
-                        </div>
-                    )}
-                </div>
-
-                {/* Community Guidelines */}
-                <div className="max-w-6xl mx-auto mt-12">
-                    <Card className="border-primary/20 bg-primary/5">
-                        <CardHeader>
-                            <CardTitle className="flex items-center space-x-2 text-primary">
-                                <Shield className="h-5 w-5" />
-                                <span>Community Guidelines</span>
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                                <div>
-                                    <h4 className="font-semibold mb-2">Safe Space Principles</h4>
-                                    <ul className="space-y-1 text-muted-foreground">
-                                        <li>• Respect everyone's journey and experiences</li>
-                                        <li>• No victim blaming or judgment</li>
-                                        <li>• Maintain confidentiality and privacy</li>
-                                    </ul>
-                                </div>
-                                <div>
-                                    <h4 className="font-semibold mb-2">Sharing Guidelines</h4>
-                                    <ul className="space-y-1 text-muted-foreground">
-                                        <li>• Share only what you're comfortable with</li>
-                                        <li>• Use trigger warnings when appropriate</li>
-                                        <li>• Focus on healing and support</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            </main>
-
-            <Footer />
-        </div>
-    )
+function getCategoryFromTags(tags: string[] | null | undefined): UiStory["category"] {
+  if (!tags?.length) return "general";
+  const cat = tags.find(t => /^cat:/.test(t))?.split(":")[1];
+  return (CATEGORIES as readonly string[]).includes(cat as string) ? (cat as UiStory["category"]) : "general";
 }
 
-export default Stories
+function toPreview(full: string, len = 200) {
+  if (!full) return "";
+  return full.length > len ? full.slice(0, len) + "..." : full;
+}
+
+export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
+  const [story, setStory] = useState<UiStory | null>(propStory ?? null);
+  const [loading, setLoading] = useState(!propStory && !!storyId);
+  const [error, setError] = useState<string | null>(null);
+  const [likeLoading, setLikeLoading] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (propStory || !storyId) return;
+
+    const fetchStory = async () => {
+      try {
+        setLoading(true);
+
+        // base story
+        const { data: row, error: dbError } = await supabase
+          .from("stories")
+          .select("id,title,content,author_id,created_at,tags")
+          .eq("id", storyId)
+          .maybeSingle<DbStory>();
+        if (dbError) throw dbError;
+        if (!row) throw new Error("Story not found.");
+
+        // author profile
+        let author = {
+          id: row.author_id,
+          name: "Anonymous",
+          anonymous: !row.author_id,
+          avatar: null as string | null,
+          verified: false,
+        };
+        if (row.author_id) {
+          const { data: profiles } = await supabase
+            .from("community_members")
+            .select("user_id,name,avatar_url,verified")
+            .eq("user_id", row.author_id)
+            .maybeSingle<{ user_id: string; name: string; avatar_url: string | null; verified: boolean }>();
+          if (profiles) {
+            author = {
+              id: row.author_id,
+              name: profiles.name || "User",
+              anonymous: false,
+              avatar: profiles.avatar_url,
+              verified: !!profiles.verified,
+            };
+          }
+        }
+
+        // like count (with fallback)
+        const { data: likeCount } = await supabase
+          .from("story_like_counts")
+          .select("story_id,likes")
+          .eq("story_id", row.id)
+          .maybeSingle<{ story_id: string; likes: number }>();
+        let likesValue = likeCount?.likes ?? null;
+        if (likesValue == null) {
+          const { count: likesC } = await supabase
+            .from("story_likes")
+            .select("story_id", { count: "exact", head: true })
+            .eq("story_id", row.id);
+          likesValue = likesC ?? 0;
+        }
+
+        // view count (with fallback)
+        const { data: viewCount } = await supabase
+          .from("story_view_counts")
+          .select("story_id,views")
+          .eq("story_id", row.id)
+          .maybeSingle<{ story_id: string; views: number }>();
+        let viewsValue = viewCount?.views ?? null;
+        if (viewsValue == null) {
+          const { count: viewsC } = await supabase
+            .from("story_views")
+            .select("story_id", { count: "exact", head: true })
+            .eq("story_id", row.id);
+          viewsValue = viewsC ?? 0;
+        }
+
+        // comments count
+        const { count: commentsCount } = await supabase
+          .from("comments")
+          .select("id", { count: "exact", head: true })
+          .eq("story_id", row.id);
+
+        // current user like
+        const { data: { user } } = await supabase.auth.getUser();
+        let isLiked = false;
+        if (user) {
+          const { data: mine } = await supabase
+            .from("story_likes")
+            .select("story_id")
+            .eq("story_id", row.id)
+            .eq("user_id", user.id)
+            .maybeSingle();
+          isLiked = !!mine;
+        }
+
+        const mapped: UiStory = {
+          id: row.id,
+          title: row.title ?? "",
+          content: toPreview(row.content ?? ""),
+          full_content: row.content ?? "",
+          author,
+          created_at: row.created_at ?? new Date().toISOString(),
+          category: getCategoryFromTags(row.tags),
+          likes: likesValue ?? 0,
+          is_liked: isLiked,
+          comments_count: commentsCount ?? 0,
+          views: viewsValue ?? 0,
+          tags: Array.isArray(row.tags) ? row.tags : [],
+          featured: false,
+        };
+
+        setStory(mapped);
+      } catch (err) {
+        console.error("Error fetching story:", err);
+        setError("Failed to load story.");
+        toast.error("Failed to load story. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchStory();
+  }, [propStory, storyId]);
+
+  // Realtime updates for likes/views and current user's like status
+  useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let likeChannel: ReturnType<typeof supabase.channel> | null = null;
+    let isMounted = true;
+
+    const sub = async () => {
+      const id = (story?.id ?? storyId) as string | undefined;
+      if (!id) return;
+
+      channel = supabase
+        .channel(`story-agg-${id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'story_like_counts', filter: `story_id=eq.${id}` },
+          (payload: { new?: { likes?: number; count?: number }; old?: unknown }) => {
+            const likes = (payload.new?.likes ?? payload.new?.count ?? null) as number | null;
+            if (likes != null && isMounted) setStory((s) => (s ? { ...s, likes } : s));
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'story_view_counts', filter: `story_id=eq.${id}` },
+          (payload: { new?: { views?: number; count?: number }; old?: unknown }) => {
+            const views = (payload.new?.views ?? payload.new?.count ?? null) as number | null;
+            if (views != null && isMounted) setStory((s) => (s ? { ...s, views } : s));
+          }
+        )
+        .subscribe();
+
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth.user) {
+        likeChannel = supabase
+          .channel(`story-like-${id}-${auth.user.id}`)
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'story_likes', filter: `story_id=eq.${id}` },
+            (payload: { new?: { user_id?: string }; old?: { user_id?: string } }) => {
+              if (payload.new?.user_id === auth.user!.id && isMounted) {
+                setStory((s) => (s ? { ...s, is_liked: true } : s));
+              }
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: 'DELETE', schema: 'public', table: 'story_likes', filter: `story_id=eq.${id}` },
+            (payload: { new?: { user_id?: string }; old?: { user_id?: string } }) => {
+              if (payload.old?.user_id === auth.user!.id && isMounted) {
+                setStory((s) => (s ? { ...s, is_liked: false } : s));
+              }
+            }
+          )
+          .subscribe();
+      }
+    };
+
+    sub();
+    return () => {
+      isMounted = false;
+      channel?.unsubscribe();
+      likeChannel?.unsubscribe();
+    };
+  }, [story?.id, storyId]);
+
+  const toggleLike = async () => {
+    if (!story) return;
+    setLikeLoading(story.id);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Login required.");
+        navigate("/auth/login");
+        return;
+      }
+
+      const nextLiked = !story.is_liked;
+      // optimistic update
+      setStory(s => s ? { ...s, is_liked: nextLiked, likes: s.likes + (nextLiked ? 1 : -1) } : s);
+
+      if (nextLiked) {
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error } = await supabase
+          .from("story_likes")
+          .insert([{ story_id: story.id, user_id: user!.id }]);
+        if (error && (error as { code?: string }).code !== "23505") {
+          // rollback
+          setStory(s => s ? { ...s, is_liked: false, likes: Math.max(0, s.likes - 1) } : s);
+          const errObj = error as PostgrestError;
+          const msg = errObj?.message || errObj?.hint || errObj?.details || "Like failed.";
+          toast.error("Like failed", { description: msg });
+        }
+      } else {
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error } = await supabase
+          .from("story_likes")
+          .delete()
+          .eq("story_id", story.id)
+          .eq("user_id", user?.id ?? "");
+        if (error) {
+          // rollback
+          setStory(s => s ? { ...s, is_liked: true, likes: s.likes + 1 } : s);
+          const errObj = error as PostgrestError;
+          const msg = errObj?.message || errObj?.hint || errObj?.details || "Unlike failed.";
+          toast.error("Unlike failed", { description: msg });
+        }
+      }
+    } finally {
+      setLikeLoading(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-lg border p-4">
+        <div className="h-40 w-full animate-pulse rounded-md bg-muted" />
+        <div className="mt-4 h-4 w-2/3 animate-pulse rounded bg-muted" />
+        <div className="mt-2 h-4 w-1/2 animate-pulse rounded bg-muted" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border p-4 text-center text-red-600">
+        {error}
+        <Button onClick={() => window.location.reload()} className="mt-2">
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!story) {
+    toast.warning("Missing story data");
+    return null;
+  }
+
+  const created = formatDistanceToNow(parseISO(story.created_at), { addSuffix: true });
+
+  return (
+    <div className="group overflow-hidden rounded-xl border bg-card transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5">
+      <Link
+        to={`/stories/${story.id}`}
+        className="block"
+        aria-label={`View story: ${story.title}`}
+      >
+        <div className="relative w-full overflow-hidden">
+          {story.featured && (
+            <div className="absolute top-2 right-2">
+              <Badge className="bg-primary text-primary-foreground">Featured</Badge>
+            </div>
+          )}
+        </div>
+        <div className="p-4">
+          <h3 className="mb-1 line-clamp-2 text-lg font-semibold tracking-tight transition-colors group-hover:text-primary">
+            {story.title?.trim() || toPreview(story.full_content || story.content || "", 60)}
+          </h3>
+        </div>
+      </Link>
+
+      <div className="p-4 pt-0">
+        <div className="mb-3 flex flex-col sm:flex-row sm:items-center gap-3 text-sm text-muted-foreground min-w-0">
+          <div className="flex items-center gap-3">
+            {story.author.avatar ? (
+              <Avatar className="h-8 w-8 border border-border ring-1 ring-primary/10 shadow-sm">
+                <AvatarImage src={story.author.avatar} alt={story.author.name} />
+                <AvatarFallback className="text-[11px] font-semibold">
+                  {(story.author.name || "A").slice(0, 1)}
+                </AvatarFallback>
+              </Avatar>
+            ) : (
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted border border-border ring-1 ring-primary/10">
+                {story.author.anonymous ? (
+                  <Shield className="h-4 w-4" />
+                ) : (
+                  <span className="text-[11px] font-semibold">
+                    {(story.author.name || "A").slice(0, 1)}
+                  </span>
+                )}
+              </div>
+            )}
+            <span className="flex-1 truncate font-medium text-foreground">
+              {story.author.name}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Clock className="h-4 w-4" />
+            <span>{created}</span>
+          </div>
+          <div className="sm:ml-auto shrink-0">
+            <Badge variant="outline" className="text-xs">
+              {String(story.category || "").replace("-", " ") || "general"}
+            </Badge>
+          </div>
+        </div>
+        <p className="mb-3 line-clamp-3 text-sm text-muted-foreground">
+          {story.content}
+        </p>
+        {Array.isArray(story.tags) && story.tags.filter(t => !/^cat:/.test(t)).length > 0 ? (
+          <div className="mb-3 flex flex-wrap gap-1">
+            {story.tags
+              .filter((t) => !/^cat:/.test(t))
+              .slice(0, 4)
+              .map((tag) => (
+                <Badge key={tag} variant="secondary" className="text-xs">
+                  #{String(tag).replace(/-/g, "")}
+                </Badge>
+              ))}
+            {story.tags.filter(t => !/^cat:/.test(t)).length > 4 && (
+              <Badge variant="secondary" className="text-xs">
+                +{story.tags.filter(t => !/^cat:/.test(t)).length - 4} more
+              </Badge>
+            )}
+          </div>
+        ) : (
+          <p className="mb-3 text-xs text-muted-foreground">No tags</p>
+        )}
+
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1">
+              <Heart className={`h-4 w-4 ${story.is_liked ? "fill-red-500 text-red-500" : ""}`} />
+              {story.likes}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <MessageCircle className="h-4 w-4" />
+              {story.comments_count}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Eye className="h-4 w-4" />
+              {story.views}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={likeLoading === story.id}
+              onClick={toggleLike}
+              aria-label={story.is_liked ? `Unlike ${story.title}` : `Like ${story.title}`}
+            >
+              <ThumbsUp className={`h-4 w-4 ${story.is_liked ? "fill-blue-500 text-blue-500" : ""}`} />
+            </Button>
+            <Link
+              to={`/stories/${story.id}`}
+              className="text-primary underline-offset-2 hover:underline"
+            >
+              Read more
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+import Navbar from "@/components/utils/Navbar";
+import { Footer } from "@/components/utils/Footer";
+import Loading from "@/components/utils/Loading";
+
+type ListItem = { id: string };
+
+export default function Stories() {
+  const [ids, setIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState<UiStory["category"] | "all">("all");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+
+  const PAGE_SIZE = 12;
+
+  const fetchIds = async (reset = false) => {
+    try {
+      if (reset) {
+        setLoading(true);
+        setPage(1);
+      }
+
+      const from = reset ? 0 : (page - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      let q = supabase.from("stories").select("id,created_at,tags,title,content,status", { count: "exact" });
+      q = q.eq("status", "published");
+      if (category !== "all") {
+        q = q.contains("tags", [`cat:${category}`]);
+      }
+      if (search.trim()) {
+        const term = search.trim();
+        q = q.or(`title.ilike.%${term}%,content.ilike.%${term}%`);
+      }
+      q = q.order("created_at", { ascending: false }).range(from, to);
+
+      let { data, error, count } = await q;
+      // Fallback: if 'status' column doesn't exist, retry without it
+      if (error && (error as PostgrestError).code === "42703") {
+        let q2 = supabase.from("stories").select("id,created_at,tags,title,content", { count: "exact" });
+        if (category !== "all") q2 = q2.contains("tags", [`cat:${category}`]);
+        if (search.trim()) {
+          const term = search.trim();
+          q2 = q2.or(`title.ilike.%${term}%,content.ilike.%${term}%`);
+        }
+        q2 = q2.order("created_at", { ascending: false }).range(from, to);
+        const r2 = await q2;
+        data = r2.data
+          ? r2.data.map((item) => ({ ...item, status: "published" }))
+          : null;
+        error = r2.error;
+        count = r2.count as number | null;
+      }
+      if (error) throw error;
+      const newIds = (data as ListItem[] | null)?.map((d: ListItem) => d.id) ?? [];
+      setIds((prev) => (reset ? newIds : [...prev, ...newIds]));
+      const total = typeof count === "number" ? count : newIds.length;
+      const consumed = (reset ? 0 : (page - 1) * PAGE_SIZE) + newIds.length;
+      setHasMore(consumed < total);
+      if (!reset) setPage((p) => p + 1);
+    } catch (e) {
+      console.error("Failed to load stories list:", e);
+      setError("Failed to load stories.");
+      toast.error("Failed to load stories. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // initial load
+    fetchIds(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // refetch when category changes
+    fetchIds(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
+
+  useEffect(() => {
+    // debounce search input
+    const h = setTimeout(() => {
+      fetchIds(true);
+    }, 400);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
+      <Navbar />
+      <main className="flex-1 relative container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="text-center mb-8">
+          <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur">
+            <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> Community Stories
+          </span>
+          <h1 className="mt-3 text-3xl md:text-5xl font-bold tracking-tight">
+            <span className="bg-gradient-to-r from-primary to-rose-500 bg-clip-text text-transparent">Share, Support, Heal</span>
+          </h1>
+          <p className="mt-2 text-base md:text-lg text-muted-foreground max-w-2xl mx-auto">
+            Read and share lived experiences to inspire, inform, and empower others.
+          </p>
+        </div>
+
+        <Card className="mb-8 shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex w-full max-w-2xl gap-2">
+                <div className="relative flex-1">
+                  <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search stories..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    aria-label="Search stories"
+                    className="pl-9 bg-background/70 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-border/50"
+                  />
+                </div>
+                <Select value={category} onValueChange={(v) => setCategory(v as UiStory["category"] | "all")}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Category" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    <SelectItem value="all">All</SelectItem>
+                    {CATEGORIES.map((c) => (
+                      <SelectItem key={c} value={c}>{c[0].toUpperCase() + c.slice(1)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button asChild>
+                <Link to="/account/my-stories/new">Share Your Story</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {loading ? (
+          <div className="flex justify-center py-20">
+            <Loading />
+          </div>
+        ) : error ? (
+          <div className="text-center text-red-600">{error}</div>
+        ) : ids.length === 0 ? (
+          <div className="flex items-center justify-center py-24">
+            <div className="text-center">
+              <div className="mx-auto mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                <SearchIcon className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="text-lg font-semibold">No stories found</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Try a different search or category.</p>
+              <div className="mt-4">
+                <Button asChild variant="outline">
+                  <Link to="/account/my-stories/new">Be the first to share</Link>
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {ids.map((id, idx) => (
+                <div
+                  key={id}
+                  className="animate-fade-in-up"
+                  style={{ animationDelay: `${Math.min(idx, 10) * 60}ms` }}
+                >
+                  <StoryCard storyId={id} />
+                </div>
+              ))}
+            </div>
+            {hasMore && (
+              <div className="mt-8 flex justify-center">
+                <Button onClick={() => fetchIds(false)}>Load more</Button>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+      <Footer />
+    </div>
+  );
+}
