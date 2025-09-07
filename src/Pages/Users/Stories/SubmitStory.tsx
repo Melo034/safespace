@@ -29,14 +29,13 @@ export default function SubmitStory() {
   const [content, setContent] = useState("");
   const [tagsInput, setTagsInput] = useState("");
   const [category, setCategory] = useState<(typeof CATEGORIES)[number] | "">("");
-  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase.auth.getUser();
       if (error || !data.user) {
-        setError("You must be logged in to submit a story.");
+        toast.error("You must be logged in to submit a story.");
         navigate("/auth/login");
         return;
       }
@@ -75,7 +74,7 @@ export default function SubmitStory() {
         author_id: auth.user.id,
       } as any;
 
-      const { data, error } = await supabase.from("stories").insert(payload).select("id").single();
+      const { error } = await supabase.from("stories").insert(payload).select("id").single();
       if (error) throw error;
       toast.success(status === "published" ? "Story published" : "Draft saved");
       navigate("/account/my-stories");
