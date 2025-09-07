@@ -446,6 +446,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
 import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import Loading from "@/components/utils/Loading";
+import LiveChat from "@/components/Home/LiveChat";
 
 type ListItem = { id: string };
 
@@ -626,6 +627,7 @@ export default function Stories() {
           </>
         )}
       </main>
+      <LiveChat/>
       <Footer />
     </div>
   );

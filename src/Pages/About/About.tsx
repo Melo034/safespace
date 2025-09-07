@@ -4,7 +4,6 @@ import supabase from "@/server/supabase";
 import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -15,6 +14,7 @@ import {
   BookOpen,
   Sparkles,
 } from "lucide-react";
+import LiveChat from "@/components/Home/LiveChat";
 
 const values = [
   {
@@ -91,21 +91,23 @@ export default function About() {
     return () => { alive = false; };
   }, []);
   return (
-    <>
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <main className="py-12 sm:py-16 lg:py-24 container mx-auto px-4 md:px-6 max-w-6xl">
+      <main className="flex-1 py-12 sm:py-16 lg:py-24 container mx-auto px-4 md:px-6 max-w-6xl">
         {/* Hero */}
         <section className="mb-10 sm:mb-14">
-          <Badge variant="secondary" className="mb-3 w-fit">About Us</Badge>
+          <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur mb-3">
+            <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> About Us
+          </span>
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight leading-tight mb-3">
-            A safer space to report, heal, and find support
+            <span className="bg-gradient-to-r from-primary to-rose-500 bg-clip-text text-transparent">A safer space to report, heal, and find support</span>
           </h1>
           <p className="text-muted-foreground max-w-3xl text-base sm:text-lg">
             We’re building compassionate, privacy‑respecting tools to help people impacted by gender‑based
             violence report incidents, access trusted resources, and connect with a caring community.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-            <Button asChild className="w-full sm:w-auto">
+            <Button asChild className="w-full sm:w-auto bg-gradient-to-r from-primary to-rose-500 text-white hover:from-primary/90 hover:to-rose-500/90">
               <Link to="/report">Report an Incident</Link>
             </Button>
             <Button asChild variant="outline" className="w-full sm:w-auto">
@@ -116,7 +118,7 @@ export default function About() {
 
         {/* Stats */}
         <section className="mb-12 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="text-center min-w-0">
+          <Card className="text-center min-w-0 hover:-translate-y-0.5 hover:shadow-md transition">
             <CardHeader>
               <CardTitle className="text-2xl sm:text-3xl">{reports == null ? "—" : nf(reports)}</CardTitle>
             </CardHeader>
@@ -124,7 +126,7 @@ export default function About() {
               <p className="text-sm text-muted-foreground">Reports Supported</p>
             </CardContent>
           </Card>
-          <Card className="text-center min-w-0">
+          <Card className="text-center min-w-0 hover:-translate-y-0.5 hover:shadow-md transition">
             <CardHeader>
               <CardTitle className="text-2xl sm:text-3xl">{stories == null ? "—" : nf(stories)}</CardTitle>
             </CardHeader>
@@ -132,7 +134,7 @@ export default function About() {
               <p className="text-sm text-muted-foreground">Stories Shared</p>
             </CardContent>
           </Card>
-          <Card className="text-center min-w-0">
+          <Card className="text-center min-w-0 hover:-translate-y-0.5 hover:shadow-md transition">
             <CardHeader>
               <CardTitle className="text-2xl sm:text-3xl">{resources == null ? "—" : nf(resources)}</CardTitle>
             </CardHeader>
@@ -140,7 +142,7 @@ export default function About() {
               <p className="text-sm text-muted-foreground">Resources Verified</p>
             </CardContent>
           </Card>
-          <Card className="text-center min-w-0">
+          <Card className="text-center min-w-0 hover:-translate-y-0.5 hover:shadow-md transition">
             <CardHeader>
               <CardTitle className="text-2xl sm:text-3xl">{members == null ? "—" : nf(members)}</CardTitle>
             </CardHeader>
@@ -155,7 +157,7 @@ export default function About() {
           <h2 className="text-xl sm:text-2xl font-semibold mb-4">What We Do</h2>
           <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {features.map((f) => (
-              <Card key={f.title}>
+              <Card key={f.title} className="hover:-translate-y-0.5 hover:shadow-md transition">
                 <CardHeader>
                   <div className="flex items-center gap-2 text-primary">
                     {f.icon}
@@ -178,7 +180,7 @@ export default function About() {
           <h2 className="text-xl sm:text-2xl font-semibold mb-4">Our Values</h2>
           <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {values.map((v) => (
-              <Card key={v.title}>
+              <Card key={v.title} className="hover:-translate-y-0.5 hover:shadow-md transition">
                 <CardHeader>
                   <div className="flex items-center gap-3">
                     {v.icon}
@@ -198,7 +200,7 @@ export default function About() {
           <h2 className="text-xl sm:text-2xl font-semibold mb-4">Who’s Behind This</h2>
           <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((n) => (
-              <Card key={n}>
+              <Card key={n} className="hover:-translate-y-0.5 hover:shadow-md transition">
                 <CardHeader>
                   <div className="flex items-center gap-3">
                     <Avatar className="h-10 w-10">
@@ -232,7 +234,7 @@ export default function About() {
                 </p>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                <Button asChild className="w-full sm:w-auto">
+                <Button asChild className="w-full sm:w-auto bg-gradient-to-r from-primary to-rose-500 text-white hover:from-primary/90 hover:to-rose-500/90">
                   <Link to="/report">Report Now</Link>
                 </Button>
                 <Button asChild variant="outline" className="w-full sm:w-auto">
@@ -243,7 +245,8 @@ export default function About() {
           </Card>
         </section>
       </main>
+      <LiveChat/>
       <Footer />
-    </>
+    </div>
   );
 }

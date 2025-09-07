@@ -26,8 +26,10 @@ import {
   Shield,
   BadgeCheck,
 } from "lucide-react";
+import type { PostgrestError } from "@supabase/supabase-js";
 import Loading from "@/components/utils/Loading";
 import type { Story as StoryType, Comment } from "@/lib/types";
+import LiveChat from "@/components/Home/LiveChat";
 
 const commentSchema = z.object({
   content: z
@@ -182,16 +184,16 @@ export default function Story() {
           .from("stories")
           .select("id, title, content, author_id, created_at, tags, status")
           .eq("id", idParam)
-          .maybeSingle();
-
-        if (storyError && (storyError as any).code === "42703") {
+          .maybeSingle<StoryRow>();
+        // Import PostgrestError at the top: import type { PostgrestError } from "@supabase/supabase-js";
+        if (storyError && (storyError as { code?: string } as PostgrestError).code === "42703") {
           const r2 = await supabase
             .from("stories")
             .select("id, title, content, author_id, created_at, tags")
             .eq("id", idParam)
             .maybeSingle();
-          storyRow = r2.data as any;
-          storyError = r2.error as any;
+          storyRow = r2.data ? ({ ...(r2.data as StoryRow) }) : null;
+          storyError = r2.error;
         }
 
         if (storyError || !storyRow) {
@@ -202,8 +204,8 @@ export default function Story() {
 
         // visibility: published or owner/admin
         const visible =
-          (storyRow as any).status
-            ? (storyRow as any).status === "published" ||
+          (storyRow as StoryRow).status
+            ? (storyRow as StoryRow).status === "published" ||
               (auth.user && (storyRow.author_id === auth.user.id || isAdminLocal))
             : true;
         if (!visible) {
@@ -276,7 +278,7 @@ export default function Story() {
           try {
             await supabase.from("story_views").insert({ story_id: (storyRow as StoryRow).id, user_id: auth.user.id });
             setStory((prev) => prev ? { ...prev, views: prev.views + 1 } : prev);
-          } catch (_) {
+          } catch {
             // ignore
           }
         }
@@ -289,8 +291,13 @@ export default function Story() {
         storyChannel = supabase
           .channel(`story-${storyRow.id}`)
           .on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "stories", filter: `id=eq.${storyRow.id}` },
+            'postgres_changes',
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "stories",
+              filter: `id=eq.${storyRow.id}`,
+            },
             (payload: { new: Partial<StoryRow> }) => {
               const row = payload.new;
               if (!row) return;
@@ -307,45 +314,65 @@ export default function Story() {
               );
             }
           )
-          .subscribe();
+          .subscribe((status) => {
+            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+              console.error(`Story channel status: ${status}`);
+            }
+          });
 
         commentsChannel = supabase
           .channel(`comments-${storyRow.id}`)
           .on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "comments", filter: `story_id=eq.${storyRow.id}` },
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'comments', filter: `story_id=eq.${storyRow.id}` },
             async () => {
               const refreshed = await fetchComments(storyRow.id, 1);
               setComments(refreshed.rows);
               setHasMore(ITEMS_PER_PAGE < refreshed.total);
               setPage(1);
-              setStory((prev) =>
-                prev ? { ...prev, comments_count: refreshed.total } : prev
-              );
+              setStory((prev) => (prev ? { ...prev, comments_count: refreshed.total } : prev));
             }
           )
-          .subscribe();
+          .on(
+            'postgres_changes',
+            { event: 'DELETE', schema: 'public', table: 'comments', filter: `story_id=eq.${storyRow.id}` },
+            async () => {
+              const refreshed = await fetchComments(storyRow.id, 1);
+              setComments(refreshed.rows);
+              setHasMore(ITEMS_PER_PAGE < refreshed.total);
+              setPage(1);
+              setStory((prev) => (prev ? { ...prev, comments_count: refreshed.total } : prev));
+            }
+          )
+          .subscribe((status) => {
+            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+              console.error(`Comments channel status: ${status}`);
+            }
+          });
 
-        // Realtime updates for likes/views counts
         countsChannel = supabase
           .channel(`story-counts-${storyRow.id}`)
           .on(
             'postgres_changes',
-            { event: '*', schema: 'public', table: 'story_like_counts', filter: `story_id=eq.${storyRow.id}` },
-            (payload: any) => {
+            { event: 'UPDATE', schema: 'public', table: 'story_like_counts', filter: `story_id=eq.${storyRow.id}` },
+            (payload: { new: { story_id: string; likes?: number; count?: number } }) => {
               const likes = (payload.new?.likes ?? payload.new?.count ?? null) as number | null;
               if (likes != null) setStory((prev) => (prev ? { ...prev, likes } : prev));
             }
           )
           .on(
             'postgres_changes',
-            { event: '*', schema: 'public', table: 'story_view_counts', filter: `story_id=eq.${storyRow.id}` },
-            (payload: any) => {
-              const views = (payload.new?.views ?? payload.new?.count ?? null) as number | null;
+            { event: 'UPDATE', schema: 'public', table: 'story_view_counts', filter: `story_id=eq.${storyRow.id}` },
+            (payload: { new: { story_id: string; views?: number; count?: number } }) => {
+              const views = payload.new?.views ?? payload.new?.count ?? null;
               if (views != null) setStory((prev) => (prev ? { ...prev, views } : prev));
             }
           )
-          .subscribe();
+          .subscribe((status) => {
+            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+              console.error(`Counts channel status: ${status}`);
+            }
+          });
 
         setLoading(false);
       } catch (e) {
@@ -403,7 +430,7 @@ export default function Story() {
         if (error && (error as { code?: string }).code !== "23505") {
           // rollback
           setStory((s) => s ? { ...s, is_liked: false, likes: Math.max(0, s.likes - 1) } : s);
-          const msg = (error as any)?.message || (error as any)?.hint || (error as any)?.details || "Like failed.";
+          const msg = (error as PostgrestError)?.message || (error as PostgrestError)?.hint || (error as PostgrestError)?.details || "Like failed.";
           toast.error("Like failed", { description: msg });
         }
       } else {
@@ -415,7 +442,11 @@ export default function Story() {
         if (error) {
           // rollback
           setStory((s) => s ? { ...s, is_liked: true, likes: s.likes + 1 } : s);
-          const msg = (error as any)?.message || (error as any)?.hint || (error as any)?.details || "Unlike failed.";
+          const msg =
+            (error as PostgrestError)?.message ||
+            (error as PostgrestError)?.hint ||
+            (error as PostgrestError)?.details ||
+            "Unlike failed.";
           toast.error("Unlike failed", { description: msg });
         }
       }
@@ -847,6 +878,7 @@ export default function Story() {
           </Card>
         </div>
       </main>
+      <LiveChat/>
       <Footer />
     </div>
   );
