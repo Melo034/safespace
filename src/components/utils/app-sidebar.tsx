@@ -11,7 +11,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { LayoutDashboard, ClipboardList, UserPlus, Settings, FileText, MapPin, BarChart3, BookOpen } from "lucide-react"
+import { LayoutDashboard, ClipboardList, UserPlus, Settings, FileText, BarChart3, BookOpen} from "lucide-react"
 import Logo from "@/assets/safespacelogo.png"
 
 
@@ -20,18 +20,13 @@ const data = {
   navMain: [
     {
       title: "Dashboard",
-      url: "/admin-dashboard",
+      url: "/admin-dashboard/dashboard",
       icon: LayoutDashboard,
     },
     {
-      title: "Analystics",
+      title: "Analytics",
       url: "/admin-dashboard/analytics",
-      icon: BarChart3, BookOpen,
-    },
-    {
-      title: "Incident Map",
-      url: "/admin-dashboard/incident-map",
-      icon: MapPin,
+      icon: BarChart3,
     }, {
       title: "Report Management",
       url: "/admin-dashboard/reports",
@@ -74,11 +69,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild className="justify-center pt-20 pb-15">
-              <a href="/admin-dashboard" className="flex items-center justify-center">
+              <Link to="/admin-dashboard/dashboard" className="flex items-center justify-center">
                 <div className="flex flex-col gap-0.5 leading-none">
                   <img src={Logo} className="w-32 h-48 object-contain" alt="logo" />
                 </div>
-              </a>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -87,7 +82,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarGroup>
           <SidebarMenu>
             {data.navMain.map((item) => {
-              const isMainActive = item.url !== "#" && currentPath === item.url
+              const isMainActive =
+                item.url !== "#" &&
+                (currentPath === item.url || currentPath.startsWith(item.url + "/"))
 
               return (
                 <SidebarMenuItem key={item.title}>
@@ -95,8 +92,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     {item.url !== "#" ? (
                       <Link
                         to={item.url}
-                        className={`flex items-center text-sm font-medium rounded-md px-3 py-1.5 transition-colors duration-200"
-                          }`}
+                        className="flex items-center text-sm font-medium rounded-md px-3 py-1.5 transition-colors duration-200"
                       >
                         {item.icon && <item.icon className="w-4 h-4 mr-2" />}
                         {item.title}

@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import HeroImage from "@/assets/Hero.jpg";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 
 const Hero = () => {
   return (
@@ -44,11 +45,11 @@ const Hero = () => {
               transition={{ duration: 0.3, delay: 1 }}
               className="mt-8 flex flex-wrap justify-center md:justify-start gap-4"
             >
-              <Button size={"lg"} className="transform font-Lora transition-all duration-300 hover:-translate-y-0.5">
-                Report
+              <Button asChild size={"lg"} className="transform font-Lora transition-all duration-300 hover:-translate-y-0.5">
+                <Link to="/report">Report</Link>
               </Button>
-              <Button variant={"outline"} className="transform font-Lora transition-all duration-300 hover:-translate-y-0.5">
-                Contact Support
+              <Button asChild variant={"outline"} className="transform font-Lora transition-all duration-300 hover:-translate-y-0.5">
+                <Link to="/support">Contact Support</Link>
               </Button>
             </motion.div>
           </div>
