@@ -38,54 +38,56 @@ function App() {
   return (
     <>
       <Toaster richColors position="top-center" closeButton={true} />
-      <Suspense fallback={<div className="p-6"><Loading /></div>}>
-        <Routes>
-          {/* Public Routes */}
-          <Route path="/" element={<Home />} />
-          <Route path="/report" element={<Report />} />
-          <Route path="/resources" element={<Resources />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/stories" element={<Stories />} />
-          <Route path="/support/apply" element={<SupportServiceApplication />} />
-          {/* Use id to match stories table primary key */}
-          <Route path="/stories/:id" element={<Story />} />
-          <Route path="/support" element={<Support />} />
-          <Route path="/auth/forgot-password" element={<ForgotPassword />} />
-          <Route path="/auth/reset-password/:token" element={<ResetPassword />} />
-          <Route path="/auth/login" element={<Login />} />
-          <Route path="/auth/signup" element={<SignUp />} />
-          <Route path="/auth/logout" element={<CommunityLogout />} />
-          <Route path="/unauthorized" element={<Unauthorized />} />
-          <Route path="/account/profile" element={<Profile />} />
-          <Route path="/account/password-settings" element={<PasswordSettings />} />
-          <Route path="/account/my-stories" element={<MyStories />} />
-          <Route path="/account/my-stories/new" element={<SubmitStory />} />
-          <Route path="/account/my-stories/:id/edit" element={<EditStory />} />
+      <div className="flex items-center justify-center min-h-screen">
+        <Suspense fallback={<div className="p-6"><Loading /></div>}>
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/" element={<Home />} />
+        <Route path="/report" element={<Report />} />
+        <Route path="/resources" element={<Resources />} />
+        <Route path="/about" element={<About />} />
+        <Route path="/stories" element={<Stories />} />
+        <Route path="/support/apply" element={<SupportServiceApplication />} />
+        {/* Use id to match stories table primary key */}
+        <Route path="/stories/:id" element={<Story />} />
+        <Route path="/support" element={<Support />} />
+        <Route path="/auth/forgot-password" element={<ForgotPassword />} />
+        <Route path="/auth/reset-password/:token" element={<ResetPassword />} />
+        <Route path="/auth/login" element={<Login />} />
+        <Route path="/auth/signup" element={<SignUp />} />
+        <Route path="/auth/logout" element={<CommunityLogout />} />
+        <Route path="/unauthorized" element={<Unauthorized />} />
+        <Route path="/account/profile" element={<Profile />} />
+        <Route path="/account/password-settings" element={<PasswordSettings />} />
+        <Route path="/account/my-stories" element={<MyStories />} />
+        <Route path="/account/my-stories/new" element={<SubmitStory />} />
+        <Route path="/account/my-stories/:id/edit" element={<EditStory />} />
 
-          {/* Admin Login Route */}
-          <Route path="/admin/login" element={<AdminLogin />} />
-          <Route path="/admin/logout" element={<AdminLogout />} />
+        {/* Admin Login Route */}
+        <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin/logout" element={<AdminLogout />} />
 
-          {/* Admin Dashboard Routes */}
-          <Route
-            path="/admin-dashboard/*"
-            element={
-              <Routes>
-                <Route path="" element={<Navigate to="dashboard" />} />
-                <Route path="dashboard" element={<Dashboard />} />
-                <Route path="reports" element={<ReportManagement />} />
-                <Route path="community" element={<CommunityManagement />} />
-                <Route path="analytics" element={<Analytics />} />
-                <Route path="resources" element={<ResourcesManagement />} />
-                <Route path="settings" element={<SystemSettings />} />
-                <Route path="admins" element={<AdminManagement />} />
-                <Route path="support-service-approvals" element={<SupportServiceApprovals />} />
-                <Route path="*" element={<Navigate to="dashboard" />} />
-              </Routes>
-            }
-          />
-        </Routes>
-      </Suspense>
+        {/* Admin Dashboard Routes */}
+        <Route
+          path="/admin-dashboard/*"
+          element={
+            <Routes>
+              <Route path="" element={<Navigate to="dashboard" />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="reports" element={<ReportManagement />} />
+              <Route path="community" element={<CommunityManagement />} />
+              <Route path="analytics" element={<Analytics />} />
+              <Route path="resources" element={<ResourcesManagement />} />
+              <Route path="settings" element={<SystemSettings />} />
+              <Route path="admins" element={<AdminManagement />} />
+              <Route path="support-service-approvals" element={<SupportServiceApprovals />} />
+              <Route path="*" element={<Navigate to="dashboard" />} />
+            </Routes>
+          }
+        />
+      </Routes>
+    </Suspense >
+    </div>
     </>
   );
 }
