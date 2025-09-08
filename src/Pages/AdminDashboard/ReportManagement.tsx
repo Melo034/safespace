@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/server/supabase";
-import { useNavigate } from "react-router-dom";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,7 +56,6 @@ const StatCard = ({ title, value, description, icon: Icon, bgColor, color }: Sta
 
 /** ---------- Page ---------- */
 const ReportManagement = () => {
-  const navigate = useNavigate();
   const { loading: sessionLoading, role } = useAdminSession();
 
   const [reports, setReports] = useState<ReportType[]>([]);
@@ -69,16 +67,7 @@ const ReportManagement = () => {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
 
-  // Gate access by role from admin_members
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (role === null) return;
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate
 
   // load and subscribe
   useEffect(() => {

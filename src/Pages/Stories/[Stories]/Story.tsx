@@ -218,7 +218,7 @@ export default function Story() {
         let authorName = "Anonymous";
         let authorAvatar: string | null = null;
         let authorVerified = false;
-        if (storyRow.author_id) {
+        if (storyRow.author_id && (isAdminLocal || (auth.user && auth.user.id === storyRow.author_id))) {
           const { data: cm } = await supabase
             .from("community_members")
             .select("name, avatar_url, verified")

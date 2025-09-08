@@ -1,6 +1,5 @@
 // ResourcesManagement.tsx
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -25,7 +24,6 @@ type CategoryType = (typeof VALID_CATEGORIES)[number];
 
 /** ---------- Page ---------- */
 const ResourcesManagement = () => {
-  const navigate = useNavigate();
   const { loading: sessionLoading, role } = useAdminSession();
 
   const [resources, setResources] = useState<Resource[]>([]);
@@ -49,16 +47,7 @@ const ResourcesManagement = () => {
   const [docProgress, setDocProgress] = useState<number>(0);
   const [imgProgress, setImgProgress] = useState<number>(0);
 
-  /** gate by role */
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (role === null) return;
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate needed
 
   /** load + realtime */
   useEffect(() => {

@@ -85,6 +85,18 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         if (!row) throw new Error("Story not found.");
 
         // author profile
+
+        const { data: auth } = await supabase.auth.getUser();
+        let canReadProfiles = false;
+        if (auth.user) {
+          const { data: am } = await supabase
+            .from("admin_members")
+            .select("user_id")
+            .eq("user_id", auth.user.id)
+            .maybeSingle();
+          canReadProfiles = !!am;
+        }
+        
         let author = {
           id: row.author_id,
           name: "Anonymous",
@@ -92,7 +104,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
           avatar: null as string | null,
           verified: false,
         };
-        if (row.author_id) {
+        if (row.author_id && (canReadProfiles || auth.user?.id === row.author_id)) {
           const { data: profiles } = await supabase
             .from("community_members")
             .select("user_id,name,avatar_url,verified")

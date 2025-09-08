@@ -17,6 +17,17 @@ const loginSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters").max(128, "Password must be less than 128 characters"),
 });
 
+type AdminMember = {
+  id: string;
+  user_id: string;
+  name?: string;
+  email?: string;
+  username?: string | null;
+  status?: string;
+  avatar_url?: string | null;
+  role?: string;
+};
+
 const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,25 +36,39 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
   const [formErrors, setFormErrors] = useState<{ email?: string[]; password?: string[] }>({});
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const checkSession = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        // Only allow admins: check membership in admin_members
-        const { data: adminRow, error } = await supabase
-          .from("admin_members")
-          .select("user_id, role")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        if (error && error.code !== "PGRST116") {
-          console.error("Error checking admin membership:", error);
-          return;
-        }
-        if (adminRow) navigate("/admin-dashboard");
-      }
-    };
-    checkSession();
+  // Wrap checkSession in useCallback to avoid recreating it on every render
+  const checkSession = React.useCallback(async () => {
+    const { data: ures } = await supabase.auth.getUser();
+    const user = ures.user;
+    if (!user) return;
+      // Only allow admins: check membership in admin_members
+      const { data: adminRow, error } = await supabase
+        .from("admin_members")
+        .select("id,user_id,name,email,username,status,avatar_url,role")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (error) return;
+      if (!adminRow) return;
+      const admin = adminRow as AdminMember;
+      localStorage.setItem("ss.admin.role", String(admin.role || "admin"));
+      localStorage.setItem(
+        "ss.admin.profile",
+        JSON.stringify({
+          id: admin.id,
+          user_id: admin.user_id,
+          name: admin.name ?? "Admin",
+          email: admin.email ?? "",
+          username: admin.username ?? null,
+          status: admin.status ?? "active",
+          avatar_url: admin.avatar_url ?? null,
+        })
+      );
+      navigate("/admin-dashboard");
   }, [navigate]);
+
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,17 +101,37 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
       // Guard: only allow if already present in admin_members
       const { data: adminRow, error: adminErr } = await supabase
         .from("admin_members")
-        .select("user_id, role")
+        .select("id,user_id,name,email,username,status,avatar_url,role")
         .eq("user_id", user.id)
         .maybeSingle();
-      if (adminErr && adminErr.code !== "PGRST116") throw adminErr;
+      if (adminErr) throw adminErr;
       if (!adminRow) {
         await supabase.auth.signOut();
-        toast.error("Not an admin account");
+        toast.error("Not an admin account. Use the community login instead.");
+        // Surface inline errors for clarity
+        setFormErrors({ email: ["Not an admin account"], password: ["Not an admin account"] });
         return;
       }
 
-      // Skip profile updates to avoid RLS dependency issues; navigate straight to dashboard
+      // Seed admin cache for instant dashboard access
+      try {
+        const admin = adminRow as AdminMember;
+        localStorage.setItem("ss.admin.role", String(admin.role || "admin"));
+        localStorage.setItem(
+          "ss.admin.profile",
+          JSON.stringify({
+            id: admin.id,
+            user_id: admin.user_id,
+            name: admin.name ?? "Admin",
+            email: admin.email ?? "",
+            username: admin.username ?? null,
+            status: admin.status ?? "active",
+            avatar_url: admin.avatar_url ?? null,
+          })
+        );
+      } catch {
+        // Intentionally left blank: localStorage errors are non-critical
+      }
 
       toast.success("Welcome back");
       navigate("/admin-dashboard");

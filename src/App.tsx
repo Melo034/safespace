@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import { Toaster } from "sonner";
 import Loading from "./components/utils/Loading";
+import RequireAdmin from "@/components/admin/RequireAdmin";
 
 // Route-based code splitting (lazy loading)
 const Home = lazy(() => import("./Pages/Home/Home"));
@@ -72,18 +73,20 @@ function App() {
         <Route
           path="/admin-dashboard/*"
           element={
-            <Routes>
-              <Route path="" element={<Navigate to="dashboard" />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="reports" element={<ReportManagement />} />
-              <Route path="community" element={<CommunityManagement />} />
-              <Route path="analytics" element={<Analytics />} />
-              <Route path="resources" element={<ResourcesManagement />} />
-              <Route path="settings" element={<SystemSettings />} />
-              <Route path="admins" element={<AdminManagement />} />
-              <Route path="support-service-approvals" element={<SupportServiceApprovals />} />
-              <Route path="*" element={<Navigate to="dashboard" />} />
-            </Routes>
+            <RequireAdmin>
+              <Routes>
+                <Route path="" element={<Navigate to="dashboard" />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="reports" element={<ReportManagement />} />
+                <Route path="community" element={<CommunityManagement />} />
+                <Route path="analytics" element={<Analytics />} />
+                <Route path="resources" element={<ResourcesManagement />} />
+                <Route path="settings" element={<SystemSettings />} />
+                <Route path="admins" element={<AdminManagement />} />
+                <Route path="support-service-approvals" element={<SupportServiceApprovals />} />
+                <Route path="*" element={<Navigate to="dashboard" />} />
+              </Routes>
+            </RequireAdmin>
           }
         />
       </Routes>

@@ -1,6 +1,5 @@
 // SupportServiceApprovals.tsx
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -45,8 +44,7 @@ type ServiceType = (typeof VALID_TYPES)[number];
 
 /** ===== Page ===== */
 const SupportServiceApprovals = () => {
-  const navigate = useNavigate();
-  const { loading: sessionLoading, role } = useAdminSession();
+  const { loading: sessionLoading } = useAdminSession();
 
   const [support, setSupport] = useState<SupportService[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -57,16 +55,7 @@ const SupportServiceApprovals = () => {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  /** auth/role gate */
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (role === null) return;
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate
 
   /** load + realtime */
   useEffect(() => {

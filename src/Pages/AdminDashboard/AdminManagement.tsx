@@ -1,6 +1,5 @@
 // AdminManagement.tsx
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { Plus } from "lucide-react";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -29,7 +28,6 @@ const adminSchema = z.object({
 
 /** ===== Page ===== */
 const AdminManagement = () => {
-  const navigate = useNavigate();
   const { user, userRole, loading: authLoading } = useAuth();
 
   const [admins, setAdmins] = useState<Admin[]>([]);
@@ -100,18 +98,7 @@ const AdminManagement = () => {
   };
 
   /** ===== Data load ===== */
-  useEffect(() => {
-    if (!authLoading) {
-      if (!user) {
-        navigate("/auth/login");
-        return;
-      }
-      if (!["super_admin", "admin", "moderator"].includes(String(userRole))) {
-        navigate("/auth/login");
-        return;
-      }
-    }
-  }, [authLoading, user, userRole, navigate]);
+  // Route is guarded globally; no per-page gate
 
   // Debounce search to avoid chatty queries
   useEffect(() => {

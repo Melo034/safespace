@@ -1,6 +1,6 @@
 // Dashboard.tsx
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -76,7 +76,6 @@ const StatCard = ({
 
 const Dashboard = () => {
   const { loading: sessionLoading, role } = useAdminSession();
-  const navigate = useNavigate();
 
   const [stats, setStats] = useState<DashboardStats>({
     totalReports: 0,
@@ -100,16 +99,7 @@ const Dashboard = () => {
   const [totalAlerts, setTotalAlerts] = useState<number>(0);
   const itemsPerPage = 10;
 
-  // Gate access by role from admin_members
-  useEffect(() => {
-    if (sessionLoading) return; // still resolving session
-    if (role === null) return; // unresolved role, do not redirect
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate needed
 
   const fetchData = useCallback(async () => {
     try {
@@ -232,17 +222,29 @@ const Dashboard = () => {
       supabase
         .channel("reports-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "reports" }, (payload) => {
-          const data = payload.new as DashAlert;
+          // Map report row -> DashAlert, aligning with reports schema (created_at)
+          const r = payload.new as Partial<{
+            id: string;
+            title: string;
+            description: string;
+            type: string;
+            priority: string;
+            status: string;
+            location: string;
+            created_at: string;
+          }>;
+
           const newAlert: DashAlert = {
-            id: data?.id,
-            title: data?.title || "Untitled",
-            message: data?.message || "",
-            type: data?.type || IncidentType.Other,
-            priority: data?.priority || "Medium",
-            status: data?.status || "Open",
-            location: data?.location || "Unknown",
-            timestamp: data?.timestamp || new Date().toISOString(),
-            reportId: data?.id,
+            id: r?.id as string,
+            title: r?.title || "Untitled",
+            message: r?.description || "",
+            type: (r?.type as IncidentType) || IncidentType.Other,
+            priority: (r?.priority as AlertPriority) || "Medium",
+            status: (r?.status as AlertStatus) || "Open",
+            location: r?.location || "Unknown",
+            // Use created_at from reports table, not a non-existent 'timestamp' column
+            timestamp: r?.created_at || new Date().toISOString(),
+            reportId: r?.id as string,
           };
 
           if (payload.eventType === "INSERT" && ["High", "Critical"].includes(newAlert.priority)) {

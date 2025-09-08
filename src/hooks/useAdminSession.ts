@@ -43,7 +43,8 @@ export function useAdminSession() {
     | null;
   const cachedRole = (typeof window !== "undefined" ? (localStorage.getItem(ADMIN_ROLE_KEY) as Role | null) : null);
 
-  const [loading, setLoading] = useState(true);
+  // If we have a cached role, start as not loading for snappier UX
+  const [loading, setLoading] = useState(cachedRole ? false : true);
   const [role, setRole] = useState<Role>(cachedRole ?? null);
   const [profile, setProfile] = useState<AdminProfile | null>(cachedProfile ?? null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -60,7 +61,8 @@ export function useAdminSession() {
   };
 
   const read = useCallback(async () => {
-    setLoading(true);
+    // Only show a blocking load if we had no cached role
+    if (!cachedRole) setLoading(true);
     try {
       const { data: s } = await supabase.auth.getSession();
       const uid = s.session?.user?.id ?? null;
@@ -72,13 +74,20 @@ export function useAdminSession() {
         persist(null, null);
         return;
       }
-      // You need to fetch 'a' from your database or API before this block.
-      // For example:
-      const { data: adminData } = await supabase
+      // Check membership in admin_members without throwing when no row exists
+      const { data: adminData, error: adminErr } = await supabase
         .from("admin_members")
         .select("*")
         .eq("user_id", uid)
-        .single();
+        .maybeSingle();
+
+      if (adminErr) {
+        // On query error (not just no row), treat as not admin but don't crash
+        setProfile(null);
+        setRole("member");
+        persist("member", null);
+        return;
+      }
 
       if (adminData) {
         const adminMember = adminData as AdminMemberRow;
@@ -122,4 +131,3 @@ export function useAdminSession() {
 
   return { loading, userId, role, isAdmin, isSuperAdmin, profile, signOut, refresh: read };
 }
-

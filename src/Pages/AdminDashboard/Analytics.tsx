@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import { Button } from "@/components/ui/button";
@@ -39,8 +38,7 @@ const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff7300", "#a4de6c"];
 
 /** ---------- Page ---------- */
 const Analytics = () => {
-  const { loading: sessionLoading, role } = useAdminSession();
-  const navigate = useNavigate();
+  const { loading: sessionLoading } = useAdminSession();
 
   const [monthlyData, setMonthlyData] = useState<MonthlyDataItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,16 +46,7 @@ const Analytics = () => {
   const [previousCounts, setPreviousCounts] = useState({ reports: 0, stories: 0, resources: 0, support: 0 });
   const [reportTypeDistribution, setReportTypeDistribution] = useState<{ name: string; value: number; color: string }[]>([]);
 
-  // Gate access by role from admin_members
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (role === null) return;
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate needed
 
   const fetchAnalytics = useCallback(async () => {
     try {

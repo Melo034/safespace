@@ -19,7 +19,6 @@ import { z } from "zod";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import type { CommunityMember } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
-import { useNavigate } from "react-router-dom";
 import { AppSidebar } from "@/components/utils/app-sidebar";
 import AdminHeader from "@/components/admin/AdminHeader";
 
@@ -32,7 +31,6 @@ const moderationSchema = z.object({
 /** ---------- Page ---------- */
 const CommunityManagement = () => {
   const { loading: sessionLoading, role } = useAdminSession();
-  const navigate = useNavigate();
 
   const [members, setMembers] = useState<CommunityMember[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -52,16 +50,7 @@ const CommunityManagement = () => {
 
   const canModerate = useMemo(() => role === "super_admin" || role === "admin", [role]);
 
-  // Gate access by role from admin_members
-  useEffect(() => {
-    if (sessionLoading) return;
-    if (role === null) return;
-    const allowed = ["super_admin", "admin", "moderator"];
-    if (!allowed.includes(String(role))) {
-      toast.error("Only admins can access this page.");
-      navigate("/unauthorized");
-    }
-  }, [sessionLoading, role, navigate]);
+  // Route is guarded globally; no per-page gate
 
   // Debounce search input for network efficiency
   useEffect(() => {

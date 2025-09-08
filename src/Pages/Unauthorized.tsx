@@ -1,8 +1,13 @@
 import { Link, useLocation } from "react-router-dom";
 
 export default function Unauthorized() {
+  interface LocationState {
+    from?: string;
+  }
+
   const location = useLocation();
-  const from = (location.state as any)?.from as string | undefined;
+  const state = location.state as LocationState | null;
+  const from = state?.from;
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="max-w-md w-full text-center space-y-4">
