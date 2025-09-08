@@ -3,7 +3,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { MessageCircle, X, Send, Trash2, Shield, Phone, AlertTriangle, Bot, User } from "lucide-react";
+import {
+  MessageCircle,
+  X,
+  Send,
+  Trash2,
+  Shield,
+  Phone,
+  AlertTriangle,
+  Bot,
+  User,
+} from "lucide-react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { nanoid } from "nanoid";
 
@@ -88,6 +98,15 @@ You are not a replacement for professional help but a bridge to connect users wi
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
+    // Close on Escape for accessibility
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape" && isOpen) handleCloseChat();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [isOpen]);
+
     // Reset chat when closing
     const handleCloseChat = () => {
         setMessages([
@@ -119,24 +138,37 @@ You are not a replacement for professional help but a bridge to connect users wi
         setIsLoading(true);
 
         try {
-            const chatHistory = messages
-                .map((msg) => ({
-                    role: msg.sender === "user" ? "user" : "model",
-                    parts: [{ text: msg.text }],
-                }))
-                .concat({ role: "user", parts: [{ text: inputMessage }] });
+            const hasKey = !!import.meta.env.VITE_GEMINI_API_KEY;
 
-            const result = await model.generateContent({ contents: chatHistory });
-            const responseText = await result.response.text();
+            if (!hasKey) {
+                const fallback: Message = {
+                    id: messages.length + 2,
+                    text:
+                        "Thanks for reaching out. I’m here to listen and support you. For immediate help in Sierra Leone, you can call the free and confidential 116 GBV hotline or the Family Support Unit (FSU). If you feel unsafe right now, please call 112. How can I support you at this moment?",
+                    sender: "support",
+                    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                };
+                setMessages((prev) => [...prev, fallback]);
+            } else {
+                const chatHistory = messages
+                    .map((msg) => ({
+                        role: msg.sender === "user" ? "user" : "model",
+                        parts: [{ text: msg.text }],
+                    }))
+                    .concat({ role: "user", parts: [{ text: inputMessage }] });
 
-            const supportResponse: Message = {
-                id: messages.length + 2,
-                text: responseText,
-                sender: "support",
-                time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            };
+                const result = await model.generateContent({ contents: chatHistory });
+                const responseText = await result.response.text();
 
-            setMessages((prev) => [...prev, supportResponse]);
+                const supportResponse: Message = {
+                    id: messages.length + 2,
+                    text: responseText,
+                    sender: "support",
+                    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                };
+
+                setMessages((prev) => [...prev, supportResponse]);
+            }
         } catch (error) {
             console.error("Error calling Gemini API:", error);
             const errorResponse: Message = {
@@ -183,16 +215,22 @@ You are not a replacement for professional help but a bridge to connect users wi
                 </div>
             </div>
 
-            {/* Chat Window */}
+            {/* Overlay on small screens */}
             {isOpen && (
-                <Card
-                    className={`fixed bottom-4 right-4 w-full py-10 max-w-md sm:max-w-lg md:max-w-xl shadow-2xl border-0 rounded-2xl overflow-hidden z-50 transition-all duration-300 ${isMinimized ? "h-14" : "h-[75vh] max-h-[600px]"
-                        } md:w-96`}
-                    role="dialog"
-                    aria-labelledby="chat-header"
-                >
+                <>
+                    <div
+                        className="fixed inset-0 bg-black/30 backdrop-blur-[1px] sm:hidden z-40"
+                        onClick={handleCloseChat}
+                        aria-hidden="true"
+                    />
+                    <Card
+                        className={`fixed inset-x-3 bottom-3 sm:bottom-5 sm:right-5 sm:left-auto sm:w-[24rem] md:w-[28rem] lg:w-[30rem] shadow-2xl border-0 rounded-2xl overflow-hidden z-50 transition-all duration-300 ${isMinimized ? "h-14" : "h-[85vh] sm:h-[34rem]"} flex flex-col bg-white`}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="chat-header"
+                    >
                     {/* Header */}
-                    <CardHeader className="bg-gradient-to-r from-primary to-primary/80 text-white p-4 relative overflow-visible min-h-[160px]">
+                    <CardHeader className="bg-gradient-to-r from-primary to-primary/80 text-white p-4 relative overflow-visible">
                         <div className="absolute inset-0 bg-black/10" />
                         <div className="relative z-10">
                             <div className="flex items-center justify-between">
@@ -210,7 +248,7 @@ You are not a replacement for professional help but a bridge to connect users wi
                                         <p className="text-sm text-white/80">Confidential • 24/7</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center space-x-2">
+                                <div className="flex items-center space-x-1">
                                     <Button
                                         variant="ghost"
                                         size="sm"
@@ -224,7 +262,7 @@ You are not a replacement for professional help but a bridge to connect users wi
                             </div>
 
                             {!isMinimized && (
-                                <div className="mt-4 space-y-3">
+                                <div className="mt-3 space-y-3">
                                     <div className="flex items-center space-x-2 text-sm">
                                         <AlertTriangle className="h-4 w-4 text-yellow-300" />
                                         <span className="text-white/90">Use a private device for safety</span>
@@ -233,11 +271,14 @@ You are not a replacement for professional help but a bridge to connect users wi
                                         {emergencyNumbers.map((emergency) => (
                                             <Badge
                                                 key={emergency.number}
+                                                asChild
                                                 variant="secondary"
                                                 className="bg-white/20 text-white hover:bg-white/30"
                                             >
-                                                <Phone className="h-3 w-3 mr-1" />
-                                                {emergency.label}: {emergency.number}
+                                                <a href={`tel:${emergency.number}`} aria-label={`Call ${emergency.label}`}>
+                                                    <Phone className="h-3 w-3 mr-1" />
+                                                    {emergency.label}: {emergency.number}
+                                                </a>
                                             </Badge>
                                         ))}
                                     </div>
@@ -248,33 +289,26 @@ You are not a replacement for professional help but a bridge to connect users wi
 
                     {/* Chat Body */}
                     {!isMinimized && (
-                        <CardContent className="p-0 flex flex-col h-[calc(100%-140px)]">
+                        <CardContent className="p-0 flex-1 flex flex-col">
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gradient-to-b from-gray-50 to-white">
                                 {messages.map((message) => (
                                     <div
                                         key={`${sessionId.current}-${message.id}`}
-                                        className={`flex items-start space-x-3 ${message.sender === "user" ? "flex-row-reverse space-x-reverse" : ""
-                                            }`}
+                                        className={`flex items-start space-x-3 ${message.sender === "user" ? "flex-row-reverse space-x-reverse" : ""}`}
                                     >
                                         <div
-                                            className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center ${message.sender === "user"
-                                                ? "bg-gradient-to-r from-primary to-primary/80 text-white"
-                                                : "bg-gradient-to-r from-green-500 to-teal-500 text-white"
-                                                }`}
+                                            className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center ${message.sender === "user" ? "bg-gradient-to-r from-primary to-primary/80 text-white" : "bg-gradient-to-r from-green-500 to-teal-500 text-white"}`}
                                             aria-hidden="true"
                                         >
                                             {message.sender === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
                                         </div>
-                                        <div className={`max-w-[75%] ${message.sender === "user" ? "text-right" : "text-left"}`}>
+                                        <div className={`max-w-[85%] sm:max-w-[70%] ${message.sender === "user" ? "text-right" : "text-left"}`}>
                                             <div
-                                                className={`inline-block px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${message.sender === "user"
-                                                    ? "bg-gradient-to-r from-primary to-primary/80 text-white rounded-br-md"
-                                                    : "bg-white border border-gray-200 text-gray-800 rounded-bl-md"
-                                                    }`}
+                                                className={`inline-block px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm break-words ${message.sender === "user" ? "bg-gradient-to-r from-primary to-primary/80 text-white rounded-br-md" : "bg-white border border-gray-200 text-gray-800 rounded-bl-md"}`}
                                                 role="log"
                                                 aria-live="polite"
                                             >
-                                                <div className="whitespace-pre-wrap">{message.text}</div>
+                                                <div className="whitespace-pre-wrap break-words">{message.text}</div>
                                             </div>
                                             <div className="text-xs text-gray-500 mt-1">{message.time}</div>
                                         </div>
@@ -304,7 +338,7 @@ You are not a replacement for professional help but a bridge to connect users wi
                             </div>
 
                             {/* Input Area */}
-                            <div className="p-4 bg-white border-t border-gray-200">
+                            <div className="p-3 sm:p-4 bg-white border-t border-gray-200">
                                 <div className="flex items-center space-x-2 mb-2">
                                     <Button
                                         variant="outline"
@@ -323,7 +357,7 @@ You are not a replacement for professional help but a bridge to connect users wi
                                         onChange={(e) => setInputMessage(e.target.value)}
                                         placeholder="Type your message..."
                                         onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                                        className="flex-1 rounded-full border-gray-300 focus:border-primary focus:ring-primary"
+                                        className="flex-1 rounded-full border-gray-300 focus:border-primary focus:ring-primary text-sm"
                                         disabled={isLoading}
                                         aria-label="Type your message"
                                     />
@@ -342,6 +376,7 @@ You are not a replacement for professional help but a bridge to connect users wi
                         </CardContent>
                     )}
                 </Card>
+                </>
             )}
         </>
     );

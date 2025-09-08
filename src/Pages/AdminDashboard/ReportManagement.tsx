@@ -56,7 +56,7 @@ const StatCard = ({ title, value, description, icon: Icon, bgColor, color }: Sta
 
 /** ---------- Page ---------- */
 const ReportManagement = () => {
-  const { loading: sessionLoading, role } = useAdminSession();
+  const { loading: sessionLoading } = useAdminSession();
 
   const [reports, setReports] = useState<ReportType[]>([]);
   const [searchTerm, setSearchTerm] = useState("");

@@ -28,7 +28,7 @@ const adminSchema = z.object({
 
 /** ===== Page ===== */
 const AdminManagement = () => {
-  const { user, userRole, loading: authLoading } = useAuth();
+  const { userRole, loading: authLoading } = useAuth();
 
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [searchTerm, setSearchTerm] = useState("");

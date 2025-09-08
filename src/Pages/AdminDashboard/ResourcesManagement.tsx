@@ -24,7 +24,7 @@ type CategoryType = (typeof VALID_CATEGORIES)[number];
 
 /** ---------- Page ---------- */
 const ResourcesManagement = () => {
-  const { loading: sessionLoading, role } = useAdminSession();
+  const { loading: sessionLoading } = useAdminSession();
 
   const [resources, setResources] = useState<Resource[]>([]);
   const [isEditing, setIsEditing] = useState(false);

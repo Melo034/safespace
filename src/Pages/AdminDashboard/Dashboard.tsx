@@ -75,7 +75,7 @@ const StatCard = ({
 );
 
 const Dashboard = () => {
-  const { loading: sessionLoading, role } = useAdminSession();
+  const { loading: sessionLoading } = useAdminSession();
 
   const [stats, setStats] = useState<DashboardStats>({
     totalReports: 0,
