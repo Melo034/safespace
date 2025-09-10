@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { Menu, User2 } from "lucide-react";
 import supabase from "@/server/supabase";
 
@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/sheet";
 
 import Logo from "../../assets/safespacelogo.png";
+import { cn } from "@/lib/utils";
 
 interface MenuItem {
   title: string;
@@ -318,9 +319,16 @@ const DesktopItem = ({ item }: { item: MenuItem }) => {
           <div className="grid gap-2 p-4 w-[240px] md:w-[300px]">
             {item.items.map((sub) => (
               <NavigationMenuLink key={sub.title} asChild>
-                <Link
+                <NavLink
                   to={sub.url}
-                  className="flex flex-row gap-4 rounded-md p-3 leading-none no-underline transition-colors outline-none select-none hover:bg-muted hover:text-accent-foreground"
+                  className={({ isActive }) =>
+                    cn(
+                      "flex flex-row gap-4 rounded-md p-3 leading-none no-underline transition-colors outline-none select-none",
+                      isActive
+                        ? "bg-muted text-foreground"
+                        : "hover:bg-muted hover:text-accent-foreground"
+                    )
+                  }
                 >
                   <div>{sub.icon}</div>
                   <div>
@@ -329,7 +337,7 @@ const DesktopItem = ({ item }: { item: MenuItem }) => {
                       <p className="text-sm leading-snug text-muted-foreground">{sub.description}</p>
                     )}
                   </div>
-                </Link>
+                </NavLink>
               </NavigationMenuLink>
             ))}
           </div>
@@ -341,12 +349,20 @@ const DesktopItem = ({ item }: { item: MenuItem }) => {
   return (
     <NavigationMenuItem>
       <NavigationMenuLink asChild>
-        <Link
+        <NavLink
           to={item.url}
-          className="group inline-flex h-10 w-max items-center justify-center rounded-md bg-background px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-accent-foreground"
+          className={({ isActive }) =>
+            cn(
+              "group inline-flex h-10 w-max items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              isActive
+                ? "bg-muted text-foreground"
+                : "bg-background text-muted-foreground hover:bg-muted hover:text-accent-foreground"
+            )
+          }
+          end
         >
           {item.title}
-        </Link>
+        </NavLink>
       </NavigationMenuLink>
     </NavigationMenuItem>
   );
@@ -383,9 +399,18 @@ const MobileItem = ({ item }: { item: MenuItem }) => {
   }
 
   return (
-    <Link to={item.url} className="text-md font-semibold">
+    <NavLink
+      to={item.url}
+      className={({ isActive }) =>
+        cn(
+          "text-md font-semibold",
+          isActive ? "text-primary" : "text-foreground hover:text-primary"
+        )
+      }
+      end
+    >
       {item.title}
-    </Link>
+    </NavLink>
   );
 };
 

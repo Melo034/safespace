@@ -1,52 +1,56 @@
 import { AnimatedTestimonials } from "@/components/ui/animated-testimonials";
-
+import TestimonialImage1 from "@/assets/1.jpg";
+import TestimonialImage2 from "@/assets/2.jpg";
+import TestimonialImage3 from "@/assets/3.jpg";
+import TestimonialImage4 from "@/assets/4.jpg";
+import TestimonialImage5 from "@/assets/5.jpg";
 const Testimonials = () => {
-    const testimonials = [
-        {
-            quote:
-                "The attention to detail and innovative features have completely transformed our workflow. This is exactly what we've been looking for.",
-            name: "Sarah Chen",
-            designation: "Product Manager at TechFlow",
-            src: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=3560&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-        },
-        {
-            quote:
-                "Implementation was seamless and the results exceeded our expectations. The platform's flexibility is remarkable.",
-            name: "Michael Rodriguez",
-            designation: "CTO at InnovateSphere",
-            src: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=3540&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-        },
-        {
-            quote:
-                "This solution has significantly improved our team's productivity. The intuitive interface makes complex tasks simple.",
-            name: "Emily Watson",
-            designation: "Operations Director at CloudScale",
-            src: "https://images.unsplash.com/photo-1623582854588-d60de57fa33f?q=80&w=3540&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-        },
-        {
-            quote:
-                "Outstanding support and robust features. It's rare to find a product that delivers on all its promises.",
-            name: "James Kim",
-            designation: "Engineering Lead at DataPro",
-            src: "https://images.unsplash.com/photo-1636041293178-808a6762ab39?q=80&w=3464&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-        },
-        {
-            quote:
-                "The scalability and performance have been game-changing for our organization. Highly recommend to any growing business.",
-            name: "Lisa Thompson",
-            designation: "VP of Technology at FutureNet",
-            src: "https://images.unsplash.com/photo-1624561172888-ac93c696e10c?q=80&w=2592&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-        },
-    ];
-    return (
-        <div className="max-w-6xl mx-auto px-4 sm:py-14 lg:py-18">
-            <h2 className="text-3xl sm:text-5xl font-bold text-center my-10">Stories of Hope</h2>
-            <p className="text-center text-lg mb-12">
-                Hear from survivors who found support through our platform.
-            </p>
-            <AnimatedTestimonials testimonials={testimonials} />
-        </div>
-    )
+  const testimonials = [
+    {
+      quote:
+        "I felt safe sharing my story. Being able to report anonymously and get matched with support gave me courage I didn’t think I had.",
+      name: "Mariama Bangura",
+      designation: "Survivor (Community Member)",
+      src: TestimonialImage3,
+    },
+    {
+      quote:
+        "The intake is trauma‑informed and respectful. Referrals arrive with the right context, so I can focus on care—not paperwork.",
+      name: "Isatu Kamara",
+      designation: "Licensed Therapist & Trauma Counselor",
+      src: TestimonialImage2,
+    },
+    {
+      quote:
+        "Evidence uploads and a clear timeline help me advise clients quickly. Privacy defaults are strong and client‑first.",
+      name: "Abdulai Koroma",
+      designation: "Legal Aid Attorney",
+      src: TestimonialImage1,
+    },
+    {
+      quote:
+        "Coordinating support used to take days. Now I can connect survivors to services in minutes and track follow‑ups responsibly.",
+      name: "Fatmata Sesay",
+      designation: "Social Worker",
+      src: TestimonialImage4,
+    },
+    {
+      quote:
+        "As a support group facilitator, I appreciate the verified resources and clear guidance on safety planning.",
+      name: "Abigail Kargbo",
+      designation: "Support Group Facilitator",
+      src: TestimonialImage5,
+    },
+  ];
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:py-14 lg:py-18">
+      <h2 className="text-3xl sm:text-5xl font-bold text-center my-10">Stories of Support</h2>
+      <p className="text-center text-lg mb-12">
+        Hear from survivors, therapists, and legal advocates using Safespace.
+      </p>
+      <AnimatedTestimonials testimonials={testimonials} />
+    </div>
+  )
 }
 
 export default Testimonials

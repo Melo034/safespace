@@ -11,6 +11,7 @@ import { Mail, Phone, MapPin, User, Briefcase, Languages, FileText, Globe, Shiel
 import  Navbar  from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import LiveChat from "@/components/Home/LiveChat";
+import SOSButton from "@/components/utils/SOSButton";
 
 const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
 type ServiceType = (typeof VALID_TYPES)[number];
@@ -482,6 +483,7 @@ const SupportServiceApplication = () => {
           </CardContent>
         </Card>
       </main>
+      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>

@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import LiveChat from "@/components/Home/LiveChat";
+import SOSButton from "@/components/utils/SOSButton";
 import type { ReportType } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -153,12 +154,20 @@ const Report = () => {
       const { error } = await supabase.from("reports").insert(reportData);
       if (error) {
         const dbError = error as PostgrestError;
-        console.error("insert error:", {
-          message: dbError.message,
-          details: dbError.details,
-          hint: dbError.hint,
-          code: dbError.code,
-        });
+        // Improve visibility of error payload when devtools stringify to [Object]
+        console.error(
+          "insert error:",
+          JSON.stringify(
+            {
+              message: dbError.message,
+              details: dbError.details,
+              hint: dbError.hint,
+              code: dbError.code,
+            },
+            null,
+            2
+          )
+        );
         throw error;
       }
 
@@ -182,19 +191,34 @@ const Report = () => {
       setReportType("");
       setIsAnonymous(false);
     } catch (err: unknown) {
-      console.error("Error submitting report:", err);
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-          ? err
-          : "Failed to submit report. Please try again.";
-      if (String(msg).toLowerCase().includes("row-level security")) {
+      // Provide a clearer, user-friendly toast and console output
+      const asPg = err as Partial<PostgrestError> | undefined;
+      const code = asPg?.code ?? "";
+      const message = asPg?.message ?? (err instanceof Error ? err.message : String(err ?? ""));
+      const details =
+        asPg && "details" in asPg && typeof (asPg as { details?: unknown }).details === "string"
+          ? (asPg as { details: string }).details
+          : undefined;
+
+      // Rich console output for debugging
+      console.error(
+        "Error submitting report:",
+        JSON.stringify({ code, message, details }, null, 2)
+      );
+
+      const lower = String(message).toLowerCase();
+      if (lower.includes("row-level security") || code === "42501") {
         toast.error(
-          "Your report could not be saved due to security rules. For anonymous submissions, inserts with reported_by = NULL must be allowed."
+          "Insert blocked by RLS policy. Allow inserts to 'reports' (e.g., authenticated users or anonymous with reported_by IS NULL)."
         );
+      } else if (code === "23502") {
+        toast.error("Missing required field. Check NOT NULL columns like 'reported_by'.");
+      } else if (code === "23503") {
+        toast.error("Invalid reference. Ensure 'reported_by' matches an existing user.");
+      } else if (code === "22P02") {
+        toast.error("Type mismatch (e.g., invalid UUID or JSON). Verify column types.");
       } else {
-        toast.error(String(msg));
+        toast.error(message || "Failed to submit report. Please try again.");
       }
     } finally {
       setIsSubmitting(false);
@@ -517,6 +541,7 @@ const Report = () => {
         </div>
       </main>
       <LiveChat />
+      <SOSButton />
       <Footer />
     </div>
   );

@@ -11,6 +11,7 @@ import { Download, ExternalLink, FileText, Globe, Search, Filter, Heart, BookOpe
 import { toast } from "sonner";
 import LiveChat from "@/components/Home/LiveChat";
 import type { Resource } from "@/lib/types";
+import SOSButton from "@/components/utils/SOSButton";
 
 const categoryIcons = {
   "safety-planning": Shield,
@@ -423,6 +424,7 @@ const Resources = () => {
           )}
         </div>
       </main>
+      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>

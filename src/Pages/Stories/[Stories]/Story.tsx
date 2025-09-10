@@ -30,6 +30,7 @@ import type { PostgrestError } from "@supabase/supabase-js";
 import Loading from "@/components/utils/Loading";
 import type { Story as StoryType, Comment } from "@/lib/types";
 import LiveChat from "@/components/Home/LiveChat";
+import SOSButton from "@/components/utils/SOSButton";
 
 const commentSchema = z.object({
   content: z
@@ -878,6 +879,7 @@ export default function Story() {
           </Card>
         </div>
       </main>
+      <SOSButton/>
       <LiveChat/>
       <Footer />
     </div>

@@ -39,8 +39,15 @@ function App() {
   return (
     <>
       <Toaster richColors position="top-center" closeButton={true} />
-      <div className="flex items-center justify-center min-h-screen">
-        <Suspense fallback={<div className="p-6"><Loading /></div>}>
+      {/* Let routed pages control their own layout; avoid centering the entire app */}
+      <div className="min-h-screen">
+        <Suspense
+          fallback={
+            <div className="flex w-full min-h-screen items-center justify-center p-6">
+              <Loading />
+            </div>
+          }
+        >
       <Routes>
         {/* Public Routes */}
         <Route path="/" element={<Home />} />

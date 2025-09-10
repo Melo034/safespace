@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import Loading from "@/components/utils/Loading";
 import LiveChat from "@/components/Home/LiveChat";
 import type { SupportService } from "@/lib/types";
+import SOSButton from "@/components/utils/SOSButton";
 
 const typeIcons = {
   lawyer: Scale,
@@ -488,6 +489,7 @@ const Support = () => {
           </Card>
         </div>
       </main>
+      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>
