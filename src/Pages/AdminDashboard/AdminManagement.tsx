@@ -8,12 +8,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { z } from "zod";
 import supabase from "@/server/supabase";
-import { useAuth } from "@/hooks/authUtils";
+
+import { useAuth, syncAdminProfileFromSupabase } from "@/hooks/authUtils";
+import { useAdminSession } from "@/hooks/useAdminSession";
 import AdminTable from "@/components/admin/AdminTable";
 import AdminDialogs from "@/components/admin/AdminDialogs";
 import AdminFilters from "@/components/admin/AdminFilters";
 import Loading from "@/components/utils/Loading";
-import type { Admin, AdminFormData, AdminStatus, RoleType, PageState } from "@/lib/types";
+import type {
+  Admin,
+  AdminFormData,
+  AdminStatus,
+  RoleType,
+  PageState,
+} from "@/lib/types";
 import AdminHeader from "@/components/admin/AdminHeader";
 
 /** ===== Validation (UI only) ===== */
@@ -21,14 +29,17 @@ const adminSchema = z.object({
   user_id: z.string().uuid({ message: "Provide a valid user_id" }).optional(),
   name: z.string().min(2, "Name must be at least 2 characters"),
   email: z.string().email("Invalid email"),
-  role: z.custom<RoleType>().refine((v) => ["admin", "super_admin", "moderator"].includes(String(v))),
-  status: z.custom<AdminStatus>().refine((v) => ["active", "inactive", "suspended"].includes(String(v))),
+  role: z
+    .custom<RoleType>()
+    .refine((v) => ["admin", "super_admin", "moderator"].includes(String(v))),
+  status: z
+    .custom<AdminStatus>()
+    .refine((v) => ["active", "inactive", "suspended"].includes(String(v))),
 });
 
-
-/** ===== Page ===== */
 const AdminManagement = () => {
   const { userRole, loading: authLoading } = useAuth();
+  const { profile: currentAdmin, refresh: refreshAdminSession } = useAdminSession();
 
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -41,15 +52,20 @@ const AdminManagement = () => {
 
   const [selectedAdmin, setSelectedAdmin] = useState<Admin | null>(null);
 
-  const [formData, setFormData] = useState<AdminFormData & { avatarFile?: File | null }>({
+  const [formData, setFormData] = useState<
+    AdminFormData & { avatarFile?: File | null }
+  >({
     user_id: "",
     name: "",
     email: "",
     role: "admin",
     status: "active",
+    password: "",
     avatarFile: null,
   });
-  const [formErrors, setFormErrors] = useState<Partial<Record<keyof AdminFormData, string>>>({});
+  const [formErrors, setFormErrors] = useState<
+    Partial<Record<keyof AdminFormData, string>>
+  >({});
 
   const [loading, setLoading] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -57,20 +73,34 @@ const AdminManagement = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
-  const [pageState, setPageState] = useState<PageState>({ page: 1, pageSize: 10, total: 0 });
+  const [pageState, setPageState] = useState<PageState>({
+    page: 1,
+    pageSize: 10,
+    total: 0,
+  });
 
-  const from = useMemo(() => (pageState.page - 1) * pageState.pageSize, [pageState]);
+  const from = useMemo(
+    () => (pageState.page - 1) * pageState.pageSize,
+    [pageState]
+  );
   const to = useMemo(() => from + pageState.pageSize - 1, [from, pageState.pageSize]);
 
   /** ===== Helpers ===== */
-  const allowedRoles: RoleType[] = useMemo(() => ["super_admin", "admin", "moderator"], []);
-
   const hasPerm = (action: "add" | "edit" | "delete", targetRole: RoleType) => {
     if (!userRole) return false;
     if (userRole === "super_admin") return true;
     if (userRole === "admin") return targetRole !== "super_admin";
     if (userRole === "moderator") return action === "edit" && targetRole === "moderator";
     return false;
+  };
+
+  const isDbErrorWithCode = (err: unknown): err is { code: string } => {
+    return (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      typeof (err as Record<string, unknown>).code === "string"
+    );
   };
 
   const validateForm = (data: Partial<AdminFormData>) => {
@@ -97,82 +127,78 @@ const AdminManagement = () => {
     }
   };
 
-  /** ===== Data load ===== */
-  // Route is guarded globally; no per-page gate
-
-  // Debounce search to avoid chatty queries
+  /** ===== Data load via RPC ===== */
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 300);
     return () => clearTimeout(t);
   }, [searchTerm]);
 
   useEffect(() => {
-    let active = true;
-
-    async function load() {
+    let alive = true;
+    const load = async () => {
       setLoading(true);
       try {
-        // Read directly from admin_members (source of truth), with filters and pagination
-        let amQuery = supabase
-          .from("admin_members")
-          .select(
-            "user_id,name,email,username,status,avatar_url,role,created_at",
-            { count: "exact" }
-          )
-          .order("created_at", { ascending: false })
-          .range(from, to);
+        const q = debouncedSearch || null;
+        const s = filterStatus === "all" ? null : filterStatus;
+        const r = filterRole === "all" ? null : filterRole;
 
-        if (filterStatus !== "all") amQuery = amQuery.eq("status", filterStatus);
-        if (filterRole !== "all") amQuery = amQuery.eq("role", filterRole);
-        if (debouncedSearch) {
-          const q = debouncedSearch;
-          amQuery = amQuery.or(`name.ilike.%${q}%,email.ilike.%${q}%,username.ilike.%${q}%`);
-        }
+        const { data, error } = await supabase.rpc("admin_list", {
+          p_search: q,
+          p_status: s,
+          p_role: r,
+          p_from: from,
+          p_to: to,
+        });
+        if (error) throw error;
 
-        const { data: adminsPage, error: amErr, count } = await amQuery;
-        if (amErr) throw amErr;
+        if (!alive) return;
 
-        if (!active) return;
+        const rows = (data ?? []) as Array<{
+          id: string;
+          user_id: string | null;
+          name: string | null;
+          email: string | null;
+          username: string | null;
+          status: string | null;
+          role: string | null;
+          avatar_url: string | null;
+          created_at: string | null;
+          total_count: number;
+        }>;
 
-        type AdminMemberRow = {
-          user_id: string;
-          name?: string;
-          email?: string;
-          username?: string;
-          status?: string;
-          avatar_url?: string;
-        };
-
-        const rows: Admin[] = (adminsPage ?? []).map((a: AdminMemberRow & { role?: string; created_at?: string }) => ({
-          user_id: a.user_id,
+        const mapped: Admin[] = rows.map((a) => ({
+          id: a.id,
+          user_id: a.user_id ?? null,
           name: a.name ?? "Admin",
           email: a.email ?? "",
           role: (a.role ?? "admin") as RoleType,
           status: (a.status as AdminStatus) ?? "active",
-          created_at: (a.created_at ?? new Date().toISOString()),
+          created_at: a.created_at ?? new Date().toISOString(),
           avatar: a.avatar_url ?? undefined,
         }));
 
-        setAdmins(rows);
-        setPageState((s) => ({ ...s, total: count ?? 0 }));
+        setAdmins(mapped);
+        const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+        setPageState((s0) => ({ ...s0, total }));
       } catch (err) {
         console.error(err);
         toast.error("Failed to load admins.");
       } finally {
-        if (active) setLoading(false);
+        if (alive) setLoading(false);
       }
-    }
-
+    };
     load();
-    return () => { active = false; };
-  }, [from, to, filterStatus, filterRole, debouncedSearch, allowedRoles]);
+    return () => {
+      alive = false;
+    };
+  }, [from, to, filterStatus, filterRole, debouncedSearch]);
 
-  /** ===== CRUD ===== */
+  /** ===== CRUD via RPCs ===== */
 
-  // Create: upsert admin_members only (source of truth)
+  // Create
   const handleAddAdmin = async () => {
     const payload = {
-      user_id: formData.user_id?.trim(),
+      user_id: formData.user_id?.trim() || undefined,
       name: formData.name.trim(),
       email: formData.email.trim().toLowerCase(),
       role: formData.role as RoleType,
@@ -185,19 +211,32 @@ const AdminManagement = () => {
       return;
     }
 
+    const rawPassword = formData.password?.trim() ?? "";
+    if (rawPassword.length < 8) {
+      setFormErrors((prev) => ({
+        ...prev,
+        password: "Password must be at least 8 characters",
+      }));
+      return;
+    }
+
+    const username = payload.email ? payload.email.split("@")[0].toLowerCase() : null;
+
+    setIsAdding(true);
+    let avatarUrl: string | null = null;
+
     try {
-      setIsAdding(true);
-      // Prepare avatar upload if provided
-      let avatarUrl: string | null = null;
       if (formData.avatarFile) {
         const bucket = "avatars";
         const ext = formData.avatarFile.name.split(".").pop() || "jpg";
-        const base = (payload.user_id || payload.email.split("@")[0] || "admin").replace(/[^a-zA-Z0-9_-]/g, "");
+        const base = (username || "admin").replace(/[^a-zA-Z0-9_-]/g, "");
         const path = `admins/${base}-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from(bucket).upload(path, formData.avatarFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
+        const { error: upErr } = await supabase.storage
+          .from(bucket)
+          .upload(path, formData.avatarFile, {
+            cacheControl: "3600",
+            upsert: false,
+          });
         if (upErr) {
           console.error(upErr);
           toast.error("Failed to upload avatar. Proceeding without it.");
@@ -207,68 +246,109 @@ const AdminManagement = () => {
         }
       }
 
-      // admin_members
-      const username = payload.email ? payload.email.split("@")[0].toLowerCase() : null;
-      const { error: amErr } = await supabase
-        .from("admin_members")
-        .upsert(
-          {
-            user_id: payload.user_id,
-            name: payload.name || "Admin",
-            email: payload.email,
-            username,
-            status: payload.status,
-            role: payload.role,
-            avatar_url: avatarUrl,
-          },
-          { onConflict: "user_id" }
-        );
-      if (amErr) throw amErr;
+      const { data, error } = await supabase.rpc("admin_create", {
+        p_name: formData.name.trim(),
+        p_email: formData.email.trim().toLowerCase(),
+        p_role: formData.role,
+        p_status: formData.status,
+        p_user_id: formData.user_id?.trim() || null,
+        p_username: formData.email.split("@")[0].toLowerCase(),
+        p_avatar_url: avatarUrl,           // null when absent
+        p_password: rawPassword,
+      });
 
-      setPageState((s) => ({ ...s, page: 1 }));
-      setSearchTerm("");
+      if (error) {
+        if (isDbErrorWithCode(error) && error.code === "23505") {
+          toast.error("Email or user ID already exists.");
+          return;
+        }
+        throw error;
+      }
+
+      const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+      if (!row) {
+        toast.error("Create failed.");
+        return;
+      }
+
+      const mapped: Admin = {
+        id: row.id,
+        user_id: row.user_id ?? null,
+        name: row.name ?? payload.name,
+        email: row.email ?? payload.email,
+        role: (row.role ?? payload.role) as RoleType,
+        status: (row.status as AdminStatus) ?? payload.status,
+        created_at: row.created_at ?? new Date().toISOString(),
+        avatar: row.avatar_url ?? undefined,
+      };
+
+      setAdmins((prev) => [mapped, ...prev]);
+      setPageState((s) => ({ ...s, total: s.total + 1 }));
+
       setIsAddDialogOpen(false);
       resetForm();
       toast.success("Admin added.");
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        toast.error(err.message || "Create failed.");
-      } else {
-        toast.error("Create failed.");
-      }
+    } catch (e) {
+      console.error(e);
+      const err = e as { message?: string };
+      toast.error(err?.message || "Create failed.");
     } finally {
       setIsAdding(false);
     }
   };
 
-  // Update: update admin_members (role, status, profile)
+  // Update profile and optional password
   const handleEditAdmin = async () => {
     if (!selectedAdmin) return;
+
     const payload = {
       name: formData.name.trim(),
       email: formData.email.trim().toLowerCase(),
       role: formData.role as RoleType,
       status: formData.status as AdminStatus,
     };
-    if (!validateForm({ ...payload, user_id: selectedAdmin.user_id })) return;
+
+    if (!validateForm({ ...payload, user_id: selectedAdmin.user_id ?? undefined })) return;
     if (!hasPerm("edit", selectedAdmin.role as RoleType)) {
       toast.error("No permission.");
       return;
     }
 
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      if ("password" in next) delete next.password;
+      return next;
+    });
+
+    const trimmedPassword = formData.password?.trim() ?? "";
+    if (trimmedPassword.length > 0 && trimmedPassword.length < 8) {
+      setFormErrors((prev) => ({
+        ...prev,
+        password: "Password must be at least 8 characters",
+      }));
+      return;
+    }
+
     try {
       setIsEditing(true);
-      // Upload avatar if provided
+
+      // Avatar
       let avatarUrl: string | undefined = undefined;
       if (formData.avatarFile) {
         const bucket = "avatars";
         const ext = formData.avatarFile.name.split(".").pop() || "jpg";
-        const base = (selectedAdmin.user_id || payload.email.split("@")[0] || "admin").replace(/[^a-zA-Z0-9_-]/g, "");
+        const base = (
+          selectedAdmin.user_id ||
+          payload.email.split("@")[0] ||
+          "admin"
+        ).replace(/[^a-zA-Z0-9_-]/g, "");
         const path = `admins/${base}-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from(bucket).upload(path, formData.avatarFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
+        const { error: upErr } = await supabase.storage
+          .from(bucket)
+          .upload(path, formData.avatarFile, {
+            cacheControl: "3600",
+            upsert: false,
+          });
         if (upErr) {
           console.error(upErr);
           toast.error("Failed to upload new avatar.");
@@ -278,43 +358,76 @@ const AdminManagement = () => {
         }
       }
 
-      // admin_members
-      const updatePayload: Partial<AdminFormData> & { avatar_url?: string } = {
-        name: payload.name || "Admin",
-        email: payload.email,
-        status: payload.status,
-        role: payload.role,
-      };
-      if (avatarUrl !== undefined) updatePayload.avatar_url = avatarUrl;
+      // Profile update via RPC
+      // Profile update via RPC
+      const { data, error } = await supabase.rpc("admin_update", {
+        p_id: selectedAdmin.id,
+        p_name: payload.name,
+        p_email: payload.email,
+        p_role: payload.role,
+        p_status: payload.status,
+        p_username: (
+          selectedAdmin.user_id || payload.email.split("@")[0]
+        ).toLowerCase(),
+        p_avatar_url: avatarUrl ?? null,
+      });
 
-      const { error: amErr } = await supabase
-        .from("admin_members")
-        .update(updatePayload)
-        .eq("user_id", selectedAdmin.user_id);
-      if (amErr) throw amErr;
+      if (error) {
+        if (isDbErrorWithCode(error) && error.code === "23505") {
+          toast.error("Another admin already uses this email.");
+          setIsEditing(false);
+          return;
+        }
+        throw error;
+      }
 
+      // Optional password reset
+      if (trimmedPassword) {
+        const { error: pwdErr } = await supabase.rpc("admin_set_password", {
+          p_admin_id: selectedAdmin.id,
+          p_password: trimmedPassword,
+        });
+        if (pwdErr) throw pwdErr;
+      }
+
+      const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
       setAdmins((prev) =>
         prev.map((a) =>
-          a.user_id === selectedAdmin.user_id ? { ...a, ...payload, avatar: avatarUrl ?? a.avatar } : a
+          a.id === selectedAdmin.id
+            ? {
+              ...a,
+              name: row?.name ?? payload.name,
+              email: row?.email ?? payload.email,
+              role: (row?.role ?? payload.role) as RoleType,
+              status: (row?.status as AdminStatus) ?? payload.status,
+              avatar: avatarUrl ?? a.avatar,
+            }
+            : a
         )
       );
+
+      if (currentAdmin?.id === selectedAdmin.id) {
+        await syncAdminProfileFromSupabase();
+        refreshAdminSession();
+      }
+
       setIsEditDialogOpen(false);
       resetForm();
-      toast.success("Admin updated.");
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        toast.error(err.message || "Update failed.");
-      } else {
-        toast.error("Update failed.");
-      }
+      toast.success(
+        trimmedPassword ? "Admin updated and password reset." : "Admin updated."
+      );
+    } catch (err) {
+      console.error(err);
+      const e = err as { message?: string };
+      toast.error(e?.message || "Update failed.");
     } finally {
       setIsEditing(false);
     }
   };
 
-  // Delete: remove admin profile (demote implicitly by removing membership)
-  const handleDeleteAdmin = async (user_id: string) => {
-    const row = admins.find((a) => a.user_id === user_id);
+  // Delete
+  const handleDeleteAdmin = async (adminId: string) => {
+    const row = admins.find((a) => a.id === adminId);
     if (!row) return;
     if (!hasPerm("delete", row.role as RoleType)) {
       toast.error("No permission.");
@@ -322,23 +435,17 @@ const AdminManagement = () => {
     }
 
     try {
-      setIsDeleting(user_id);
-      // remove admin profile
-      const { error: delErr } = await supabase
-        .from("admin_members")
-        .delete()
-        .eq("user_id", user_id);
-      if (delErr) throw delErr;
+      setIsDeleting(adminId);
+      const { error } = await supabase.rpc("admin_delete", { p_id: adminId });
+      if (error) throw error;
 
-      setAdmins((prev) => prev.filter((a) => a.user_id !== user_id));
+      setAdmins((prev) => prev.filter((a) => a.id !== adminId));
       setPageState((s) => ({ ...s, total: Math.max(0, s.total - 1) }));
       toast.success("Admin removed.");
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        toast.error(err.message || "Delete failed.");
-      } else {
-        toast.error("Delete failed.");
-      }
+    } catch (err) {
+      console.error(err);
+      const e = err as { message?: string };
+      toast.error(e?.message || "Delete failed.");
     } finally {
       setIsDeleting(null);
     }
@@ -352,6 +459,7 @@ const AdminManagement = () => {
       email: "",
       role: "admin",
       status: "active",
+      password: "",
       avatarFile: null,
     });
     setSelectedAdmin(null);
@@ -366,11 +474,12 @@ const AdminManagement = () => {
   const handleEditClick = (admin: Admin) => {
     setSelectedAdmin(admin);
     setFormData({
-      user_id: admin.user_id,
+      user_id: admin.user_id ?? "",
       name: admin.name,
       email: admin.email,
       role: admin.role,
       status: admin.status,
+      password: "",
     });
     setIsEditDialogOpen(true);
   };
@@ -395,8 +504,12 @@ const AdminManagement = () => {
         <div className="p-6 space-y-6">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground">Admin Management</h1>
-              <p className="text-sm text-muted-foreground">Manage administrators and their roles</p>
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+                Admin Management
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                Manage administrators and their roles
+              </p>
             </div>
             <Button
               className="rounded-full"
@@ -414,18 +527,46 @@ const AdminManagement = () => {
               const total = pageState.total;
               const active = admins.filter((a) => a.status === "active").length;
               const inactive = admins.filter((a) => a.status === "inactive").length;
-              const suspended = admins.filter((a) => a.status === "suspended").length;
+              const suspended =
+                admins.filter((a) => a.status === "suspended").length;
               const stats = [
-                { title: "Total Admins", value: total, description: total === 1 ? "1 admin" : `${total} admins` },
-                { title: "Active", value: active, description: active === 1 ? "1 active" : `${active} active` },
-                { title: "Inactive", value: inactive, description: inactive === 1 ? "1 inactive" : `${inactive} inactive` },
-                { title: "Suspended", value: suspended, description: suspended === 1 ? "1 suspended" : `${suspended} suspended` },
+                {
+                  title: "Total Admins",
+                  value: total,
+                  description: total === 1 ? "1 admin" : `${total} admins`,
+                },
+                {
+                  title: "Active",
+                  value: active,
+                  description: active === 1 ? "1 active" : `${active} active`,
+                },
+                {
+                  title: "Inactive",
+                  value: inactive,
+                  description:
+                    inactive === 1 ? "1 inactive" : `${inactive} inactive`,
+                },
+                {
+                  title: "Suspended",
+                  value: suspended,
+                  description:
+                    suspended === 1 ? "1 suspended" : `${suspended} suspended`,
+                },
               ];
               return stats.map((s) => (
-                <div key={s.title} className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
-                  <div className="text-xs font-medium text-muted-foreground tracking-wider uppercase">{s.title}</div>
-                  <div className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{s.value}</div>
-                  <div className="text-xs text-muted-foreground">{s.description}</div>
+                <div
+                  key={s.title}
+                  className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                >
+                  <div className="text-xs font-medium text-muted-foreground tracking-wider uppercase">
+                    {s.title}
+                  </div>
+                  <div className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
+                    {s.value}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {s.description}
+                  </div>
                 </div>
               ));
             })()}
@@ -478,19 +619,23 @@ const AdminManagement = () => {
 
                   <div className="flex items-center justify-between mt-4">
                     <div className="text-sm text-muted-foreground">
-                      {pageState.total} total • Page {pageState.page} / {pageCount}
+                      {pageState.total} total. Page {pageState.page} / {pageCount}
                     </div>
                     <div className="flex gap-2">
                       <Button
                         disabled={pageState.page === 1}
-                        onClick={() => setPageState((s) => ({ ...s, page: s.page - 1 }))}
+                        onClick={() =>
+                          setPageState((s) => ({ ...s, page: s.page - 1 }))
+                        }
                         aria-label="Previous page"
                       >
                         Previous
                       </Button>
                       <Button
                         disabled={pageState.page === pageCount}
-                        onClick={() => setPageState((s) => ({ ...s, page: s.page + 1 }))}
+                        onClick={() =>
+                          setPageState((s) => ({ ...s, page: s.page + 1 }))
+                        }
                         aria-label="Next page"
                       >
                         Next

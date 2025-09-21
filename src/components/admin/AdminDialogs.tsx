@@ -1,10 +1,12 @@
 // src/components/admin/AdminDialogs.tsx
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Eye, EyeOff, Upload } from "lucide-react";
 import type { Admin, AdminFormData } from "@/lib/types";
 
 interface AdminDialogsProps {
@@ -44,6 +46,7 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
   handleEditAdmin,
   resetForm,
 }) => {
+  const [showPassword, setShowPassword] = useState(false);
   const getRoleColor = (role: Admin["role"]) => {
     switch (role) {
       case "super_admin": return "bg-purple-500";
@@ -72,14 +75,34 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
         <DialogContent className="max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle>Add New Admin</DialogTitle>
+            <DialogDescription>
+              Provide admin details and role. Either paste the user's auth UID, or leave it blank to add by email.
+              Admins must be different from community members.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <Input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFormData({ ...formData, avatarFile: e.target.files?.[0] })}
-              aria-label="Upload admin avatar"
+              placeholder="User ID (auth uid) — optional"
+              value={formData.user_id}
+              onChange={(e) => setFormData({ ...formData, user_id: e.target.value })}
+              aria-label="User ID"
             />
+            <div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setFormData({ ...formData, avatarFile: e.target.files?.[0] || null })}
+                  aria-label="Upload admin avatar"
+                />
+                <Upload className="h-4 w-4 text-muted-foreground" />
+              </div>
+              {formData.avatarFile && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Selected: {formData.avatarFile.name} ({(formData.avatarFile.size / 1024).toFixed(1)} KB)
+                </p>
+              )}
+            </div>
             <Input
               placeholder="Full name"
               value={formData.name}
@@ -99,15 +122,28 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
               aria-describedby={formErrors.email ? "email-error" : undefined}
             />
             {formErrors.email && <p id="email-error" className="text-red-500 text-sm mt-1">{formErrors.email}</p>}
-            <Input
-              placeholder="Password"
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              required
-              aria-invalid={!!formErrors.password}
-              aria-describedby={formErrors.password ? "password-error" : undefined}
-            />
+            <div className="relative">
+              <Input
+                placeholder="Password"
+                type={showPassword ? "text" : "password"}
+                value={formData.password ?? ""}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                required
+                aria-invalid={!!formErrors.password}
+                aria-describedby={formErrors.password ? "password-error" : undefined}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
             {formErrors.password && <p id="password-error" className="text-red-500 text-sm mt-1">{formErrors.password}</p>}
             <Select
               value={formData.role}
@@ -152,14 +188,25 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
         <DialogContent className="max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle>Edit Admin</DialogTitle>
+            <DialogDescription>Update admin profile, role, or status.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <Input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFormData({ ...formData, avatarFile: e.target.files?.[0] })}
-              aria-label="Upload new admin avatar"
-            />
+            <div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setFormData({ ...formData, avatarFile: e.target.files?.[0] || null })}
+                  aria-label="Upload new admin avatar"
+                />
+                <Upload className="h-4 w-4 text-muted-foreground" />
+              </div>
+              {formData.avatarFile && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Selected: {formData.avatarFile.name} ({(formData.avatarFile.size / 1024).toFixed(1)} KB)
+                </p>
+              )}
+            </div>
             <Input
               placeholder="Full name"
               value={formData.name}
@@ -219,6 +266,7 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
         <DialogContent className="max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle>Admin Details</DialogTitle>
+            <DialogDescription>View-only details for this admin.</DialogDescription>
           </DialogHeader>
           {selectedAdmin && (
             <div className="space-y-4">

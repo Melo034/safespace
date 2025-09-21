@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import supabase from "@/server/supabase";
 import type { PostgrestError } from "@supabase/supabase-js";
 import Navbar from "@/components/utils/Navbar";
@@ -10,10 +10,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X } from "lucide-react";
+import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, ArrowLeft, ArrowRight, Eye } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import LiveChat from "@/components/Home/LiveChat";
-import SOSButton from "@/components/utils/SOSButton";
 import type { ReportType } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -36,6 +35,10 @@ const Report = () => {
   });
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [submittedId, setSubmittedId] = useState<string | null>(null);
+  const [masked, setMasked] = useState(false);
+
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => {
@@ -151,7 +154,11 @@ const Report = () => {
               phone: formData.phone,
             },
       };
-      const { error } = await supabase.from("reports").insert(reportData);
+      const { data: inserted, error } = await supabase
+        .from("reports")
+        .insert(reportData)
+        .select("id")
+        .single();
       if (error) {
         const dbError = error as PostgrestError;
         // Improve visibility of error payload when devtools stringify to [Object]
@@ -172,6 +179,7 @@ const Report = () => {
       }
 
       toast.success("Report submitted successfully.");
+      setSubmittedId(inserted?.id || null);
 
       setFormData({
         firstName: "",
@@ -225,9 +233,62 @@ const Report = () => {
     }
   };
 
+  // Quick-exit keyboard shortcut (Alt/Cmd + X)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.altKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+        try { window.location.replace("https://www.google.com"); } catch { window.location.href = "https://www.google.com"; }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Success screen with tracking code
+  if (submittedId) {
+    return (
+      <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
+        <Navbar />
+        <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-10 max-w-3xl">
+          <Card className="border-green-200/60 bg-green-50/70 dark:bg-emerald-950/20">
+            <CardHeader>
+              <CardTitle className="text-2xl">Report Submitted</CardTitle>
+              <CardDescription>Thank you. Your report has been received securely.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="p-4 rounded-md bg-background border">
+                <p className="text-sm text-muted-foreground">Tracking code</p>
+                <p className="text-lg font-mono font-semibold">{submittedId}</p>
+              </div>
+              <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
+                <li>You can share this code with support to help locate your report.</li>
+                <li>We will review and, if requested, connect you with appropriate services.</li>
+              </ul>
+              <div className="flex gap-2 pt-2">
+                <Button asChild><a href="/support">Find Support</a></Button>
+                <Button asChild variant="outline"><a href="/resources">Browse Resources</a></Button>
+              </div>
+            </CardContent>
+          </Card>
+        </main>
+        <LiveChat />
+        <Footer />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
+      {/* Safety: optional screen mask overlay and quick toggle */}
+      {masked && (
+        <div className="fixed inset-0 z-50 backdrop-blur-sm bg-black/10 pointer-events-none" />
+      )}
+      <div className="fixed top-20 right-4 z-50">
+        <Button size="sm" variant="outline" onClick={() => setMasked((m) => !m)}>
+          {masked ? "Unmask" : "Mask Screen"}
+        </Button>
+      </div>
       <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-4xl mx-auto mb-8">
           <div className="text-center mb-8">
@@ -241,6 +302,63 @@ const Report = () => {
               Your safety and privacy come first. Share details securely and access the right support.
             </p>
           </div>
+
+          {/* Step indicator */}
+          <Card className="mb-6">
+            <CardContent className="pt-6 flex items-center justify-between">
+              <div className="text-sm">
+                <span className="font-medium">Step {step} of 3</span>
+                <span className="text-muted-foreground ml-2">(Your Details → Incident → Evidence & Consent)</span>
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => setStep((s)=> (s>1 ? ((s-1) as 1|2|3) : s))} disabled={step===1}>
+                  <ArrowLeft className="h-4 w-4 mr-2" /> Back
+                </Button>
+                <Button type="button" size="sm" onClick={() => setStep((s)=> (s<3 ? ((s+1) as 1|2|3) : s))} disabled={step===3}>
+                  Next <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Guidance */}
+          <Card className="mb-6">
+            <CardContent className="pt-6 text-sm text-muted-foreground">
+              <div className="mb-2 font-medium text-foreground">Tips</div>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Use clear, factual language about what happened (who, what, when, where).</li>
+                <li>For evidence, upload photos or PDFs up to 10MB each; avoid sharing files you’re not ready to disclose.</li>
+                <li>You can submit anonymously or provide contact info if you want follow‑up support.</li>
+              </ul>
+            </CardContent>
+          </Card>
+
+          {/* Anonymity Preview */}
+          <Card className="mb-6">
+            <CardContent className="pt-6">
+              <div className="flex items-start gap-3">
+                <Eye className="h-5 w-5 text-primary mt-0.5" />
+                <div className="text-sm text-muted-foreground">
+                  <p className="mb-1"><span className="font-medium text-foreground">Data preview:</span> {isAnonymous ? "Anonymous" : "Identified"} submission</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    {isAnonymous ? (
+                      <>
+                        <li>No name, email, or phone stored</li>
+                        <li>Incident details, date, and location stored</li>
+                        <li>Evidence file links stored if uploaded</li>
+                      </>
+                    ) : (
+                      <>
+                        <li>Contact info stored with report</li>
+                        <li>Incident details, date, and location stored</li>
+                        <li>Evidence file links stored if uploaded</li>
+                      </>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="border-green-200/60 bg-green-50/70 dark:bg-emerald-950/20 mb-8">
             <CardContent className="pt-6">
@@ -287,10 +405,11 @@ const Report = () => {
               <CardDescription>
                 Fields marked with <span className="text-destructive">*</span> are required.
               </CardDescription>
+              {/* Draft controls removed */}
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-8">
-                <div className="space-y-3">
+              <form id="report-form" onSubmit={handleSubmit} className="space-y-8">
+                <div className={step === 1 ? "space-y-3" : "hidden"}>
                   <Label htmlFor="anonymous" className="flex items-center gap-2 text-sm">
                     <Checkbox
                       id="anonymous"
@@ -303,7 +422,7 @@ const Report = () => {
                   <p className="text-xs text-muted-foreground">We won’t collect your identity if you choose to remain anonymous.</p>
                 </div>
 
-                {!isAnonymous && (
+                {!isAnonymous && step === 1 && (
                   <div>
                     <h3 className="text-sm font-medium text-muted-foreground mb-3">Your Details</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -368,7 +487,7 @@ const Report = () => {
                   </div>
                 )}
 
-                <div className="space-y-2">
+                <div className={step === 2 ? "space-y-2" : "hidden"}>
                   <Label htmlFor="reportType">Incident Type <span className="text-destructive">*</span></Label>
                   <Select value={reportType} onValueChange={(value) => setReportType(value as ReportType["type"] | "")}>
                     <SelectTrigger>
@@ -396,6 +515,7 @@ const Report = () => {
                   <p className="text-xs text-muted-foreground">Avoid sharing sensitive details that could reveal your identity if you prefer anonymity.</p>
                 </div>
 
+                {step === 2 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="incidentDate">Date of Incident <span className="text-destructive">*</span></Label>
@@ -426,6 +546,7 @@ const Report = () => {
                     </div>
                   </div>
                 </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -499,6 +620,14 @@ const Report = () => {
                 <Button type="submit"  disabled={isSubmitting}>
                   {isSubmitting ? "Submitting..." : "Submit Report"}
                 </Button>
+                {/* Step 3 submit area */}
+                {step === 3 && (
+                  <div className="flex justify-end">
+                    <Button type="submit" disabled={isSubmitting}>
+                      {isSubmitting ? "Submitting..." : "Submit Report"}
+                    </Button>
+                  </div>
+                )}
               </form>
             </CardContent>
           </Card>
@@ -541,7 +670,6 @@ const Report = () => {
         </div>
       </main>
       <LiveChat />
-      <SOSButton />
       <Footer />
     </div>
   );

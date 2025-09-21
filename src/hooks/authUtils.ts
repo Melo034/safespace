@@ -1,108 +1,205 @@
-// src/utils/authUtils.ts
-import supabase from "@/server/supabase";
-import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
+import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
+import supabase from "@/server/supabase";
 
-// Session timeout in milliseconds (e.g., 30 minutes)
-const SESSION_TIMEOUT = 30 * 60 * 1000;
+export const ADMIN_ROLE_KEY = 'ss.admin.role';
+export const ADMIN_PROFILE_KEY = 'ss.admin.profile';
+export const ADMIN_SESSION_EVENT = 'ss.admin.session';
+
+export type AdminRole = 'super_admin' | 'admin' | 'moderator';
+export type AdminStatus = 'active' | 'inactive' | 'suspended';
+
+export type AdminProfile = {
+  id: string;
+  user_id: string | null;
+  name: string;
+  email: string;
+  username: string | null;
+  status: AdminStatus;
+  role: AdminRole;
+  avatar_url: string | null;
+};
+
+type AdminMemberRow = {
+  id: string;
+  user_id: string | null;
+  name: string | null;
+  email: string | null;
+  username: string | null;
+  status: AdminStatus | null;
+  role: AdminRole | null;
+  avatar_url: string | null;
+};
+
+const ADMIN_MEMBER_SELECT = "id,user_id,name,email,username,status,role,avatar_url";
+
+export function saveAdminSession(profile: AdminProfile) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(ADMIN_ROLE_KEY, profile.role);
+  localStorage.setItem(ADMIN_PROFILE_KEY, JSON.stringify(profile));
+  window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
+}
+
+export function loadAdminSession(): AdminProfile | null {
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem(ADMIN_PROFILE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AdminProfile;
+  } catch {
+    return null;
+  }
+}
+
+export function clearAdminSession() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(ADMIN_ROLE_KEY);
+  localStorage.removeItem(ADMIN_PROFILE_KEY);
+  window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
+}
+
+export function isAdminSignedIn() {
+  if (typeof window === 'undefined') return false;
+  return !!localStorage.getItem(ADMIN_PROFILE_KEY);
+}
+
+function mapAdminRowToProfile(row: AdminMemberRow, fallbackEmail: string | null, userId: string): AdminProfile {
+  return {
+    id: row.id,
+    user_id: row.user_id ?? userId,
+    name: row.name ?? "Admin",
+    email: row.email ?? fallbackEmail ?? "",
+    username: row.username ?? null,
+    status: (row.status ?? "inactive") as AdminStatus,
+    role: (row.role ?? "admin") as AdminRole,
+    avatar_url: row.avatar_url ?? null,
+  };
+}
+
+async function resolveAdminMember(user: User): Promise<AdminMemberRow | null> {
+  const { data: byUserId, error: byUserIdError } = await supabase
+    .from("admin_members")
+    .select<AdminMemberRow>(ADMIN_MEMBER_SELECT)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (byUserIdError && byUserIdError.code !== "PGRST116") throw byUserIdError;
+  if (byUserId) return byUserId;
+
+  if (!user.email) return null;
+
+  const { data: byEmail, error: byEmailError } = await supabase
+    .from("admin_members")
+    .select<AdminMemberRow>(ADMIN_MEMBER_SELECT)
+    .eq("email", user.email.toLowerCase())
+    .maybeSingle();
+
+  if (byEmailError && byEmailError.code !== "PGRST116") throw byEmailError;
+  return byEmail ?? null;
+}
+
+export async function syncAdminProfileFromSupabase(): Promise<AdminProfile | null> {
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      console.error("Failed to read Supabase session", error);
+      return loadAdminSession();
+    }
+
+    const user = data.user ?? null;
+    if (!user) {
+      clearAdminSession();
+      return null;
+    }
+
+    const row = await resolveAdminMember(user);
+    if (!row) {
+      clearAdminSession();
+      return null;
+    }
+
+    if (!row.user_id) {
+      try {
+        await supabase.from("admin_members").update({ user_id: user.id }).eq("id", row.id);
+        row.user_id = user.id;
+      } catch (updateErr) {
+        console.warn("Failed to backfill admin user_id", updateErr);
+      }
+    }
+
+    const profile = mapAdminRowToProfile(row, user.email ?? null, user.id);
+    saveAdminSession(profile);
+    return profile;
+  } catch (err) {
+    console.error("Failed to synchronise admin profile", err);
+    return loadAdminSession();
+  }
+}
 
 export function useAuth() {
-  const [user, setUser] = useState<User | null>(null); 
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<AdminRole | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return (localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null) ?? null;
+  });
   const [loading, setLoading] = useState(true);
-  const [lastActivity, setLastActivity] = useState(Date.now());
-  const navigate = useNavigate();
 
-  const handleLogout = useCallback(async (isAdminLogout = false) => {
-    try {
-      await supabase.auth.signOut();
-      setUser(null);
-      setUserRole(null);
-      navigate(isAdminLogout ? "/admin/login" : "/auth/login");
-    } catch (error) {
-      console.error("Logout error:", error);
-      toast.error("Failed to logout.");
+  const syncRole = useCallback(() => {
+    if (typeof window === 'undefined') {
+      setLoading(false);
+      return;
     }
-  }, [navigate]);
-
-  const fetchUserRole = async (uid: string) => {
-    // Determine role based on admin_members membership; default to null for community members
-    const { data, error } = await supabase
-      .from("admin_members")
-      .select("role")
-      .eq("user_id", uid)
-      .maybeSingle();
-    if (error && (error as any).code !== "PGRST116") return null;
-    if (!data) return null; // not an admin
-    // if role column exists, return it, else default to 'admin'
-    return (data as any).role ?? "admin";
-  };
+    const stored = localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null;
+    setUserRole(stored ?? null);
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    const unsubscribe = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const path = window.location.pathname;
-      setUser(session?.user || null);
+    let active = true;
 
-      if (session?.user) {
-        const role = await fetchUserRole(session.user.id);
-        setUserRole(role);
+    const initialise = async () => {
+      if (typeof window === 'undefined') {
         setLoading(false);
-
-        const isAdmin = ["admin", "super_admin", "moderator"].includes(role || "");
-        const isAdminRoute = path.startsWith("/admin-dashboard");
-        const isAuthRoute = path.startsWith("/auth");
-
-        // Protect admin dashboard
-        if (isAdminRoute && !isAdmin) {
-          toast.error("You do not have admin access.");
-          navigate("/admin/login");
-        }
-
-        // If admin logs into public routes, optionally redirect
-        if (!isAdminRoute && isAdmin && !isAuthRoute) {
-          // Optional: Automatically send admins to dashboard
-          navigate("/admin-dashboard");
-        }
-
-      } else {
-        // User is not logged in
-        setUserRole(null);
-        setLoading(false);
-
-        const isAdminRoute = path.startsWith("/admin-dashboard");
-
-        // Redirect only if accessing protected pages
-        if (isAdminRoute) {
-          navigate("/admin/login");
-        }
-        // Allow public pages and auth pages without redirect
+        return;
       }
+
+      await syncAdminProfileFromSupabase();
+      if (!active) return;
+      syncRole();
+    };
+
+    initialise();
+
+    if (typeof window === 'undefined') return () => {
+      active = false;
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === ADMIN_ROLE_KEY || event.key === ADMIN_PROFILE_KEY) {
+        syncRole();
+      }
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async () => {
+      if (!active) return;
+      await syncAdminProfileFromSupabase();
+      if (!active) return;
+      syncRole();
     });
 
-    // Session timeout logic
-    const checkSessionTimeout = () => {
-      const inactiveTime = Date.now() - lastActivity;
-      if (inactiveTime > SESSION_TIMEOUT && user) {
-        handleLogout();
-        toast.info("Session expired due to inactivity.");
-      }
-    };
-
-    const interval = setInterval(checkSessionTimeout, 60000); // Check every minute
-    const updateActivity = () => setLastActivity(Date.now());
-
-    window.addEventListener("mousemove", updateActivity);
-    window.addEventListener("keydown", updateActivity);
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(ADMIN_SESSION_EVENT, syncRole as EventListener);
 
     return () => {
-      unsubscribe.data.subscription.unsubscribe();
-      clearInterval(interval);
-      window.removeEventListener("mousemove", updateActivity);
-      window.removeEventListener("keydown", updateActivity);
+      active = false;
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(ADMIN_SESSION_EVENT, syncRole as EventListener);
+      authListener?.subscription.unsubscribe();
     };
-  }, [navigate, lastActivity, handleLogout, user]);
+  }, [syncRole]);
 
-  return { user, userRole, loading, handleLogout };
+  return {
+    userRole,
+    loading,
+    isSignedIn: !!userRole,
+  } as const;
 }

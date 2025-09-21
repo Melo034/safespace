@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
+﻿import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import supabase from "@/server/supabase";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import supabase from "@/server/supabase";
+import { clearAdminSession, loadAdminSession } from "@/hooks/authUtils";
 
 const AdminLogout = () => {
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -12,54 +13,56 @@ const AdminLogout = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!alive) return;
-      const user = data.session?.user;
-      setIsAuthenticated(!!user);
+    if (typeof window === "undefined") return;
+    try {
+      const profile = loadAdminSession();
+      setIsAuthenticated(Boolean(profile));
+    } catch {
+      setIsAuthenticated(false);
+    } finally {
       setChecked(true);
-    })();
-
-    const { data: listener } = supabase.auth.onAuthStateChange((event) => {
-      if (!alive) return;
-      if (event === "SIGNED_OUT") {
-        navigate("/admin/login");
-      }
-    });
-
-    return () => {
-      alive = false;
-      listener.subscription.unsubscribe();
-    };
-  }, [navigate]);
+    }
+  }, []);
 
   const handleSignOut = useCallback(async () => {
     setIsSigningOut(true);
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      let uid: string | null = null;
+      try {
+        const profile = loadAdminSession();
+        uid = profile?.user_id ?? null;
+      } catch {
+        uid = null;
+      }
+
+      await supabase.auth.signOut();
+      clearAdminSession();
+      localStorage.removeItem("ss.admin.lastLogin");
+      localStorage.removeItem("ss.auth");
+      localStorage.removeItem("ss.member");
+      if (uid) {
+        localStorage.removeItem(`ss.member.${uid}`);
+      }
+
       toast.success("Signed out of admin.");
-      navigate("/admin/login");
+      navigate("/admin/login", { replace: true });
     } catch (e) {
       console.error(e);
       toast.error("Failed to sign out. Try again.");
     } finally {
       setIsSigningOut(false);
+      setIsAuthenticated(false);
     }
   }, [navigate]);
 
   useEffect(() => {
-    // When session status is known
     if (!checked) return;
     if (isAuthenticated) {
-      // Auto sign-out for admins
       handleSignOut();
     } else {
-      // Already signed out -> go to admin login
-      navigate("/admin/login");
+      navigate("/admin/login", { replace: true });
     }
-  }, [checked, isAuthenticated, navigate, handleSignOut]);
+  }, [checked, isAuthenticated, handleSignOut, navigate]);
 
   if (!checked) {
     return (
@@ -91,5 +94,3 @@ const AdminLogout = () => {
 };
 
 export default AdminLogout;
-
-

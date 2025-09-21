@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -11,21 +11,32 @@ import { z } from "zod";
 import Loading from "@/components/utils/Loading";
 import Logo from "@/assets/safespacelogo.png";
 import supabase from "@/server/supabase";
+import {
+  ADMIN_ROLE_KEY,
+  clearAdminSession,
+  loadAdminSession,
+  syncAdminProfileFromSupabase,
+  type AdminProfile,
+  type AdminRole,
+} from "@/hooks/authUtils";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address").max(255, "Email must be less than 255 characters"),
   password: z.string().min(8, "Password must be at least 8 characters").max(128, "Password must be less than 128 characters"),
 });
 
-type AdminMember = {
-  id: string;
-  user_id: string;
-  name?: string;
-  email?: string;
-  username?: string | null;
-  status?: string;
-  avatar_url?: string | null;
-  role?: string;
+
+const readStoredAdmin = () => {
+  if (typeof window === "undefined") {
+    return { role: null as AdminRole | null, profile: null as AdminProfile | null };
+  }
+  try {
+    const profile = loadAdminSession();
+    const role = profile?.role ?? (localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null) ?? null;
+    return { role, profile };
+  } catch {
+    return { role: null as AdminRole | null, profile: null as AdminProfile | null };
+  }
 };
 
 const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
@@ -35,36 +46,18 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
   const [loading, setLoading] = useState(false);
   const [formErrors, setFormErrors] = useState<{ email?: string[]; password?: string[] }>({});
   const navigate = useNavigate();
+  const [{ role: storedRole, profile: storedProfile }] = useState(readStoredAdmin);
+  const [alreadyAdmin, setAlreadyAdmin] = useState(Boolean(storedRole && storedProfile));
 
-  // Wrap checkSession in useCallback to avoid recreating it on every render
-  const checkSession = React.useCallback(async () => {
-    const { data: ures } = await supabase.auth.getUser();
-    const user = ures.user;
-    if (!user) return;
-      // Only allow admins: check membership in admin_members
-      const { data: adminRow, error } = await supabase
-        .from("admin_members")
-        .select("id,user_id,name,email,username,status,avatar_url,role")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (error) return;
-      if (!adminRow) return;
-      const admin = adminRow as AdminMember;
-      localStorage.setItem("ss.admin.role", String(admin.role || "admin"));
-      localStorage.setItem(
-        "ss.admin.profile",
-        JSON.stringify({
-          id: admin.id,
-          user_id: admin.user_id,
-          name: admin.name ?? "Admin",
-          email: admin.email ?? "",
-          username: admin.username ?? null,
-          status: admin.status ?? "active",
-          avatar_url: admin.avatar_url ?? null,
-        })
-      );
-      navigate("/admin-dashboard");
-  }, [navigate]);
+  const checkSession = React.useCallback(() => {
+    const { role, profile } = readStoredAdmin();
+    if (role && profile) {
+      setAlreadyAdmin(true);
+      toast.info("You're already signed in as an admin.");
+    } else {
+      setAlreadyAdmin(false);
+    }
+  }, []);
 
   useEffect(() => {
     checkSession();
@@ -76,7 +69,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     setFormErrors({});
 
     const sanitizedInputs = {
-      email: email.trim(),
+      email: email.trim().toLowerCase(),
       password: password.trim(),
     };
 
@@ -88,72 +81,60 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     }
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error: authError } = await supabase.auth.signInWithPassword({
         email: sanitizedInputs.email,
         password: sanitizedInputs.password,
       });
 
-      if (error) {
-        throw error;
-      }
-      const user = data.user;
-
-      // Guard: only allow if already present in admin_members
-      const { data: adminRow, error: adminErr } = await supabase
-        .from("admin_members")
-        .select("id,user_id,name,email,username,status,avatar_url,role")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (adminErr) throw adminErr;
-      if (!adminRow) {
-        await supabase.auth.signOut();
-        toast.error("Not an admin account. Use the community login instead.");
-        // Surface inline errors for clarity
-        setFormErrors({ email: ["Not an admin account"], password: ["Not an admin account"] });
+      if (authError) {
+        const message = authError.message || "Invalid email or password";
+        setFormErrors({ email: [message], password: [message] });
+        toast.error(message);
+        setLoading(false);
         return;
       }
 
-      // Seed admin cache for instant dashboard access
-      try {
-        const admin = adminRow as AdminMember;
-        localStorage.setItem("ss.admin.role", String(admin.role || "admin"));
-        localStorage.setItem(
-          "ss.admin.profile",
-          JSON.stringify({
-            id: admin.id,
-            user_id: admin.user_id,
-            name: admin.name ?? "Admin",
-            email: admin.email ?? "",
-            username: admin.username ?? null,
-            status: admin.status ?? "active",
-            avatar_url: admin.avatar_url ?? null,
-          })
-        );
-      } catch {
-        // Intentionally left blank: localStorage errors are non-critical
+      const profile = await syncAdminProfileFromSupabase();
+      if (!profile) {
+        await supabase.auth.signOut();
+        clearAdminSession();
+        const message = "No admin account is associated with these credentials.";
+        setFormErrors({ email: [message], password: [message] });
+        toast.error(message);
+        setLoading(false);
+        return;
       }
 
-      toast.success("Welcome back");
-      navigate("/admin-dashboard");
-    } catch (err: unknown) {
-      const error = err as { code?: string; message?: string };
-      let errorMessage = "Login failed. Please check your credentials.";
-      switch (error.code) {
-        case "invalid_credentials":
-          errorMessage = "Invalid email or password";
-          setFormErrors({ email: [errorMessage], password: [errorMessage] });
-          break;
-        case "rate_limit_exceeded":
-          errorMessage = "Too many login attempts. Please try again later.";
-          break;
-        default:
-          errorMessage = error.message || errorMessage;
+      if (profile.status === "suspended") {
+        await supabase.auth.signOut();
+        clearAdminSession();
+        const message = "Your admin access is suspended. Please contact support.";
+        setFormErrors({ email: [message] });
+        toast.error(message);
+        setLoading(false);
+        return;
       }
-      toast.error(errorMessage);
+
+      try {
+        localStorage.setItem("ss.admin.lastLogin", new Date().toISOString());
+      } catch (storageErr) {
+        console.warn("Failed to persist admin last login", storageErr);
+      }
+
+      setAlreadyAdmin(true);
+      toast.success("Login successful.");
+      navigate("/admin-dashboard");
+    } catch (err) {
+      console.error(err);
+      const error = err as { message?: string };
+      const message = error.message || "Login failed. Please try again.";
+      setFormErrors({ email: [message], password: [message] });
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
+
 
   const handleInputChange = (field: "email" | "password", value: string) => {
     if (formErrors[field]) {
@@ -185,6 +166,15 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
                     Login to your Safe Space admin account
                   </p>
                 </div>
+                {alreadyAdmin && (
+                  <div className="rounded-md border p-3 text-sm bg-muted/40">
+                    You are already signed in.
+                    <div className="mt-2 flex gap-2">
+                      <Button type="button" onClick={() => navigate('/admin-dashboard')}>Go to dashboard</Button>
+                      <Button type="button" variant="outline" onClick={() => navigate('/')}>Back to site</Button>
+                    </div>
+                  </div>
+                )}
                 <div className="grid gap-2 font-lexend-deca">
                   <Label htmlFor="email">Email</Label>
                   <Input
@@ -254,3 +244,4 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
 };
 
 export default Signin;
+
