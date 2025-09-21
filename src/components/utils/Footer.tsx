@@ -29,6 +29,10 @@ const Footer = ({
         { text: "Privacy Policy", url: "#" },
     ],
 }: Footer2Props) => {
+    const links = [
+        ...bottomLinks,
+        { text: "How we protect your data", url: "/trust" },
+    ];
     return (
         <section className="mt-16 bg-neutral-100">
             <div>
@@ -36,7 +40,7 @@ const Footer = ({
                     <div className="py-10 mt-24 px-10 flex flex-col justify-between gap-4 border-t  text-sm font-medium text-muted-foreground md:flex-row md:items-center">
                         <p>{copyright}</p>
                         <ul className="flex gap-4">
-                            {bottomLinks.map((link, linkIdx) => (
+                            {links.map((link, linkIdx) => (
                                 <li key={linkIdx} className="underline hover:text-primary">
                                     <a href={link.url}>{link.text}</a>
                                 </li>

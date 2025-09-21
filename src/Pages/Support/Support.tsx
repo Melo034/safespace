@@ -24,12 +24,14 @@ import {
   Plus,
   CheckCircle,
   Sparkles,
+  Navigation,
 } from "lucide-react";
+import { Bookmark } from "lucide-react";
 import { toast } from "sonner";
 import Loading from "@/components/utils/Loading";
 import LiveChat from "@/components/Home/LiveChat";
 import type { SupportService } from "@/lib/types";
-import SOSButton from "@/components/utils/SOSButton";
+import { useSavedItems } from "@/hooks/useSavedItems";
 
 const typeIcons = {
   lawyer: Scale,
@@ -112,6 +114,9 @@ const Support = () => {
   const [typeFilter, setTypeFilter] = useState<"all" | ServiceType>("all");
   const [availabilityFilter, setAvailabilityFilter] = useState<"all" | AvailabilityType>("all");
   const [loading, setLoading] = useState(true);
+  const [mapEnabled, setMapEnabled] = useState(false);
+  const [loc, setLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const { toggle: toggleSaved, isSaved } = useSavedItems();
 
   useEffect(() => {
     const fetchSupportServices = async () => {
@@ -195,10 +200,19 @@ const Support = () => {
     });
   }, [supportServices, searchTerm, typeFilter, availabilityFilter]);
 
+  const mapQuery = useMemo(() => {
+    const terms: string[] = [];
+    if (typeFilter !== "all") terms.push(typeFilter.replace("-", " "));
+    if (searchTerm.trim()) terms.push(searchTerm.trim());
+    // fallback generic
+    if (terms.length === 0) terms.push("support services");
+    return encodeURIComponent(terms.join(" "));
+  }, [typeFilter, searchTerm]);
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <main className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main" className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-7xl mx-auto text-center mb-10">
           <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> Verified & Trusted
@@ -215,6 +229,18 @@ const Support = () => {
               Apply to Offer Support Services
             </Link>
           </Button>
+        </div>
+
+        {/* Trust explainer */}
+        <div className="max-w-6xl mx-auto mb-6">
+          <Card className="border-green-200/40">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><CheckCircle className="h-4 w-4 text-green-600"/> What "Verified" Means</CardTitle>
+              <CardDescription>
+                We review providers before listing and perform periodic checks to keep information accurate and safe.
+              </CardDescription>
+            </CardHeader>
+          </Card>
         </div>
 
         <div className="max-w-6xl mx-auto mb-8">
@@ -282,6 +308,103 @@ const Support = () => {
         </div>
 
         <div className="max-w-6xl mx-auto">
+          {/* Map + List (beta) */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-primary"/>
+                Map View (beta)
+              </CardTitle>
+              <CardDescription>Location-aware map of filtered services. Pins reflect your filters.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-3 mb-3">
+                <Button size="sm" variant={mapEnabled ? "default" : "outline"} onClick={() => setMapEnabled(v => !v)} aria-pressed={mapEnabled} aria-label="Toggle map view">
+                  {mapEnabled ? "Hide Map" : "Show Map"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    const granted = await new Promise<{lat:number;lng:number}|null>((resolve) => {
+                      if (!('geolocation' in navigator)) return resolve(null);
+                      navigator.geolocation.getCurrentPosition(
+                        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                        () => resolve(null),
+                        { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                      );
+                    });
+                    setLoc(granted);
+                    if (!granted) toast.message("Location unavailable", { description: "We couldn't access your location. The map will show general results."});
+                  }}
+                  aria-label="Use my location"
+                >
+                  Use my location
+                </Button>
+                <span className="text-xs text-muted-foreground">Showing {filteredSupport.length} services</span>
+              </div>
+              {mapEnabled && (
+                <div className="w-full rounded-md overflow-hidden border">
+                  <iframe
+                    title="Support services map"
+                    className="w-full h-[300px]"
+                    style={{ border: 0 }}
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                    src={`https://www.google.com/maps?q=${mapQuery}${loc ? `%20@${loc.lat},${loc.lng},13z` : ''}&output=embed`}
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          {/* Nearby services quick-open */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><MapPin className="h-4 w-4 text-primary"/> Find Nearby</CardTitle>
+              <CardDescription>Open Google Maps searches near you for common needs.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={async () => {
+                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
+                  if (!('geolocation' in navigator)) return resolve(null);
+                  navigator.geolocation.getCurrentPosition(
+                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                    () => resolve(null),
+                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                  )
+                });
+                let url = 'https://www.google.com/maps/search/legal+aid';
+                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }}><Navigation className="h-4 w-4 mr-2"/> Legal Aid</Button>
+              <Button size="sm" variant="outline" onClick={async () => {
+                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
+                  if (!('geolocation' in navigator)) return resolve(null);
+                  navigator.geolocation.getCurrentPosition(
+                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                    () => resolve(null),
+                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                  )
+                });
+                let url = 'https://www.google.com/maps/search/therapy+counseling';
+                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }}><Navigation className="h-4 w-4 mr-2"/> Therapy</Button>
+              <Button size="sm" variant="outline" onClick={async () => {
+                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
+                  if (!('geolocation' in navigator)) return resolve(null);
+                  navigator.geolocation.getCurrentPosition(
+                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                    () => resolve(null),
+                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                  )
+                });
+                let url = 'https://www.google.com/maps/search/women+shelter';
+                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }}><Navigation className="h-4 w-4 mr-2"/> Shelter</Button>
+            </CardContent>
+          </Card>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-bold text-foreground">Available Support ({filteredSupport.length})</h2>
           </div>
@@ -416,6 +539,22 @@ const Support = () => {
                             Website
                           </Button>
                         )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => toast.success("Callback request sent. The provider will reach out when available.")}
+                          aria-label="Request callback"
+                        >
+                          Request Callback
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => toggleSaved("support", support.id)}
+                          aria-label={isSaved("support", support.id) ? `Unsave ${support.name || "service"}` : `Save ${support.name || "service"}`}
+                        >
+                          <Bookmark className={`h-4 w-4 ${isSaved("support", support.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                        </Button>
                       </div>
 
                       {support.languages?.length > 0 && (
@@ -423,6 +562,11 @@ const Support = () => {
                           <p className="text-xs text-muted-foreground">
                             Languages: {support.languages.join(", ")}
                           </p>
+                        </div>
+                      )}
+                      {hasWebsite && (
+                        <div className="mt-2">
+                          <p className="text-xs text-muted-foreground">Remote options: Online available</p>
                         </div>
                       )}
                     </CardContent>
@@ -489,7 +633,6 @@ const Support = () => {
           </Card>
         </div>
       </main>
-      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ import {
   ADMIN_ROLE_KEY,
   clearAdminSession,
   loadAdminSession,
-  syncAdminProfileFromSupabase,
   type AdminProfile,
   type AdminRole,
 } from "@/hooks/authUtils";
@@ -24,7 +23,6 @@ const loginSchema = z.object({
   email: z.string().email("Invalid email address").max(255, "Email must be less than 255 characters"),
   password: z.string().min(8, "Password must be at least 8 characters").max(128, "Password must be less than 128 characters"),
 });
-
 
 const readStoredAdmin = () => {
   if (typeof window === "undefined") {
@@ -49,7 +47,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
   const [{ role: storedRole, profile: storedProfile }] = useState(readStoredAdmin);
   const [alreadyAdmin, setAlreadyAdmin] = useState(Boolean(storedRole && storedProfile));
 
-  const checkSession = React.useCallback(() => {
+  const checkSession = useCallback(() => {
     const { role, profile } = readStoredAdmin();
     if (role && profile) {
       setAlreadyAdmin(true);
@@ -65,12 +63,14 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
+
     setLoading(true);
     setFormErrors({});
 
     const sanitizedInputs = {
       email: email.trim().toLowerCase(),
-      password: password.trim(),
+      password, // keep as typed
     };
 
     const result = loginSchema.safeParse(sanitizedInputs);
@@ -87,38 +87,63 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
       });
 
       if (authError) {
-        const message = authError.message || "Invalid email or password";
+        const msg = authError.message?.toLowerCase() || "";
+        let message = "Invalid email or password";
+        if (msg.includes("email not confirmed")) message = "Confirm your email, then try again.";
+        if (msg.includes("invalid login credentials")) message = "Invalid email or password";
         setFormErrors({ email: [message], password: [message] });
         toast.error(message);
         setLoading(false);
         return;
       }
 
-      const profile = await syncAdminProfileFromSupabase();
-      if (!profile) {
+      // assert session before RPC
+      const { data: userData, error: getUserErr } = await supabase.auth.getUser();
+      if (getUserErr || !userData?.user) {
         await supabase.auth.signOut();
         clearAdminSession();
-        const message = "No admin account is associated with these credentials.";
+        const message = "Session missing after sign-in.";
         setFormErrors({ email: [message], password: [message] });
         toast.error(message);
         setLoading(false);
         return;
       }
 
-      if (profile.status === "suspended") {
+      const { data: ensured, error: rpcErr } = await supabase.rpc(
+        "ensure_admin_for_current_user",
+        { p_role: "super_admin" }
+      );
+
+      if (rpcErr || !ensured || ensured.length === 0) {
+        console.error("ensure_admin_for_current_user error:", rpcErr);
         await supabase.auth.signOut();
         clearAdminSession();
-        const message = "Your admin access is suspended. Please contact support.";
+        const message = "Admin setup failed. Contact support.";
+        setFormErrors({ email: [message], password: [message] });
+        toast.error(message);
+        setLoading(false);
+        return;
+      }
+
+      const profile = ensured[0] as AdminProfile;
+
+      if (profile.status !== "active") {
+        await supabase.auth.signOut();
+        clearAdminSession();
+        const message = "Admin not active.";
         setFormErrors({ email: [message] });
         toast.error(message);
         setLoading(false);
         return;
       }
 
+
       try {
+        localStorage.setItem("ss.admin.profile", JSON.stringify(profile));
+        localStorage.setItem("ss.admin.role", profile.role);
         localStorage.setItem("ss.admin.lastLogin", new Date().toISOString());
       } catch (storageErr) {
-        console.warn("Failed to persist admin last login", storageErr);
+        console.warn("Failed to persist admin session", storageErr);
       }
 
       setAlreadyAdmin(true);
@@ -134,7 +159,6 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
       setLoading(false);
     }
   };
-
 
   const handleInputChange = (field: "email" | "password", value: string) => {
     if (formErrors[field]) {
@@ -166,15 +190,21 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
                     Login to your Safe Space admin account
                   </p>
                 </div>
+
                 {alreadyAdmin && (
                   <div className="rounded-md border p-3 text-sm bg-muted/40">
                     You are already signed in.
                     <div className="mt-2 flex gap-2">
-                      <Button type="button" onClick={() => navigate('/admin-dashboard')}>Go to dashboard</Button>
-                      <Button type="button" variant="outline" onClick={() => navigate('/')}>Back to site</Button>
+                      <Button type="button" onClick={() => navigate("/admin-dashboard")}>
+                        Go to dashboard
+                      </Button>
+                      <Button type="button" variant="outline" onClick={() => navigate("/")}>
+                        Back to site
+                      </Button>
                     </div>
                   </div>
                 )}
+
                 <div className="grid gap-2 font-lexend-deca">
                   <Label htmlFor="email">Email</Label>
                   <Input
@@ -184,13 +214,17 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
                     value={email}
                     onChange={(e) => handleInputChange("email", e.target.value)}
                     required
+                    autoComplete="email"
                     aria-invalid={!!formErrors.email}
                     aria-describedby={formErrors.email ? "email-error" : undefined}
                   />
                   {formErrors.email && (
-                    <p id="email-error" className="text-red-500 text-sm">{formErrors.email[0]}</p>
+                    <p id="email-error" className="text-red-500 text-sm">
+                      {formErrors.email[0]}
+                    </p>
                   )}
                 </div>
+
                 <div className="grid gap-2 font-lexend-deca">
                   <Label htmlFor="password">Password</Label>
                   <div className="relative">
@@ -200,27 +234,29 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
                       value={password}
                       onChange={(e) => handleInputChange("password", e.target.value)}
                       required
+                      autoComplete="current-password"
                       aria-invalid={!!formErrors.password}
                       aria-describedby={formErrors.password ? "password-error" : undefined}
                     />
                     <Button
                       type="button"
                       variant="ghost"
-                      size={"sm"}
+                      size="sm"
                       className="absolute right-2 top-1/2 -translate-y-1/2"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowPassword((s) => !s)}
                       aria-label={showPassword ? "Hide password input" : "Show password input"}
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
                   </div>
                   {formErrors.password && (
-                    <p id="password-error" className="text-red-500 text-sm">{formErrors.password[0]}</p>
+                    <p id="password-error" className="text-red-500 text-sm">
+                      {formErrors.password[0]}
+                    </p>
                   )}
-                  <p className="text-sm text-muted-foreground">
-                    Password must be at least 8 characters.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Password must be at least 8 characters.</p>
                 </div>
+
                 <div className="flex justify-between items-center">
                   <Button type="submit" disabled={loading} aria-label="Submit login form">
                     {loading ? <Loading /> : null}
@@ -229,6 +265,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
                 </div>
               </div>
             </form>
+
             <div className="relative hidden md:block">
               <img
                 src={Logo}
@@ -244,4 +281,3 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
 };
 
 export default Signin;
-

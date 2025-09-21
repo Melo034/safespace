@@ -5,13 +5,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Mail, Phone, MapPin, User, Briefcase, Languages, FileText, Globe, ShieldCheck, Sparkles } from "lucide-react";
 import  Navbar  from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import LiveChat from "@/components/Home/LiveChat";
-import SOSButton from "@/components/utils/SOSButton";
 
 const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
 type ServiceType = (typeof VALID_TYPES)[number];
@@ -175,7 +174,7 @@ const SupportServiceApplication = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <main className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8 max-w-7xl">
+      <main id="main" className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8 max-w-7xl">
         <div className="max-w-3xl mx-auto text-center mb-8">
           <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> Partner Application
@@ -188,7 +187,70 @@ const SupportServiceApplication = () => {
           </p>
         </div>
 
-        <Card className="w-full max-w-3xl mx-auto shadow-sm">
+        {/* Communication */}
+        <div className="max-w-6xl mx-auto mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">Communication</CardTitle>
+              <CardDescription>Use templated messages to keep applicants informed. Secure messaging for requested edits.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="text-sm font-medium mb-1">Templates</p>
+                <div className="grid md:grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      const msg = `Hello ${formData.name || "there"},\n\nWe received your support service application and will review it within 3-5 business days. We will contact you if we need any additional information.\n\nThank you!`;
+                      await navigator.clipboard.writeText(msg);
+                      toast.success("Copied: Application received template");
+                    }}
+                  >Copy: Application received</Button>
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      const msg = `Hello ${formData.name || "there"},\n\nWe reviewed your application. Please update the following: [list requested edits].\n\nUse the secure messaging link in your dashboard to reply and upload documents.`;
+                      await navigator.clipboard.writeText(msg);
+                      toast.success("Copied: Request edits template");
+                    }}
+                  >Copy: Request edits</Button>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-medium mb-1">Secure message (preview)</p>
+                <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                  Direct secure messaging is enabled after you submit. You will receive a link by email to continue the conversation safely.
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Requirements & Status */}
+        <div className="max-w-3xl mx-auto mb-6">
+          <Card className="mb-4">
+            <CardHeader>
+              <CardTitle className="text-xl">Requirements Checklist</CardTitle>
+              <CardDescription>Eligibility, documents, and review timeline.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="text-sm text-muted-foreground space-y-2">
+                <li>• Valid contact details and service description</li>
+                <li>• Credentials or references (optional but recommended)</li>
+                <li>• Review timeline: 3–7 business days</li>
+              </ul>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">Status Tracker</CardTitle>
+              <CardDescription>Submitted → Under Review → Approved / Changes Requested</CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+
+        <div className="mx-auto max-w-6xl grid gap-6 lg:grid-cols-2">
+        <Card className="w-full shadow-sm">
           <CardHeader className="pb-4 border-b">
             <CardTitle className="flex items-center gap-2 text-xl md:text-2xl justify-center">
               <ShieldCheck className="h-5 w-5 text-primary" /> Verified Partners
@@ -482,8 +544,51 @@ const SupportServiceApplication = () => {
             </form>
           </CardContent>
         </Card>
+        {/* Live preview */}
+        <Card className="w-full shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-xl">Listing Preview</CardTitle>
+            <CardDescription>See how your profile will appear in the directory.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="group hover:shadow-lg transition-all rounded-xl border p-4">
+              <div className="flex items-start gap-4">
+                <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center text-sm font-semibold">
+                  {(formData.name || "S").slice(0,1)}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-lg font-semibold">{formData.name || "Service Name"}</p>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2 text-sm">
+                    <span className="px-2 py-0.5 rounded border text-xs">{(formData.type || "therapist").toString().replace("-"," ")}</span>
+                    {formData.availability && (
+                      <span className="px-2 py-0.5 rounded border text-xs bg-muted">{String(formData.availability).charAt(0).toUpperCase() + String(formData.availability).slice(1)}</span>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-3 mb-3">{formData.description || "Your service description will appear here."}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {formData.email && (
+                      <Button size="sm" variant="outline"><Mail className="h-4 w-4 mr-2"/> Email</Button>
+                    )}
+                    {formData.phone && (
+                      <Button size="sm" variant="outline"><Phone className="h-4 w-4 mr-2"/> Call</Button>
+                    )}
+                    {formData.website && (
+                      <Button size="sm" variant="outline"><Globe className="h-4 w-4 mr-2"/> Website</Button>
+                    )}
+                    <Button size="sm" variant="ghost">Request Callback</Button>
+                  </div>
+                </div>
+              </div>
+              {formData.languages && (
+                <p className="mt-3 text-xs text-muted-foreground">Languages: {formData.languages}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        </div>
       </main>
-      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>

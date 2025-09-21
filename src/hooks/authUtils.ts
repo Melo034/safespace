@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import supabase from "@/server/supabase";
 
-export const ADMIN_ROLE_KEY = 'ss.admin.role';
-export const ADMIN_PROFILE_KEY = 'ss.admin.profile';
-export const ADMIN_SESSION_EVENT = 'ss.admin.session';
+export const ADMIN_ROLE_KEY = "ss.admin.role";
+export const ADMIN_PROFILE_KEY = "ss.admin.profile";
+export const ADMIN_SESSION_EVENT = "ss.admin.session";
 
-export type AdminRole = 'super_admin' | 'admin' | 'moderator';
-export type AdminStatus = 'active' | 'inactive' | 'suspended';
+export type AdminRole = "super_admin" | "admin" | "moderator";
+export type AdminStatus = "active" | "inactive" | "suspended";
 
 export type AdminProfile = {
   id: string;
@@ -31,17 +31,18 @@ type AdminMemberRow = {
   avatar_url: string | null;
 };
 
-const ADMIN_MEMBER_SELECT = "id,user_id,name,email,username,status,role,avatar_url";
+const ADMIN_MEMBER_SELECT =
+  "id,user_id,name,email,username,status,role,avatar_url" as const;
 
 export function saveAdminSession(profile: AdminProfile) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   localStorage.setItem(ADMIN_ROLE_KEY, profile.role);
   localStorage.setItem(ADMIN_PROFILE_KEY, JSON.stringify(profile));
   window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
 }
 
 export function loadAdminSession(): AdminProfile | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
   const raw = localStorage.getItem(ADMIN_PROFILE_KEY);
   if (!raw) return null;
   try {
@@ -52,18 +53,22 @@ export function loadAdminSession(): AdminProfile | null {
 }
 
 export function clearAdminSession() {
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   localStorage.removeItem(ADMIN_ROLE_KEY);
   localStorage.removeItem(ADMIN_PROFILE_KEY);
   window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
 }
 
 export function isAdminSignedIn() {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === "undefined") return false;
   return !!localStorage.getItem(ADMIN_PROFILE_KEY);
 }
 
-function mapAdminRowToProfile(row: AdminMemberRow, fallbackEmail: string | null, userId: string): AdminProfile {
+function mapAdminRowToProfile(
+  row: AdminMemberRow,
+  fallbackEmail: string | null,
+  userId: string
+): AdminProfile {
   return {
     id: row.id,
     user_id: row.user_id ?? userId,
@@ -77,20 +82,23 @@ function mapAdminRowToProfile(row: AdminMemberRow, fallbackEmail: string | null,
 }
 
 async function resolveAdminMember(user: User): Promise<AdminMemberRow | null> {
+  // Try by user_id first
   const { data: byUserId, error: byUserIdError } = await supabase
     .from("admin_members")
-    .select<AdminMemberRow>(ADMIN_MEMBER_SELECT)
+    .select(ADMIN_MEMBER_SELECT)
     .eq("user_id", user.id)
     .maybeSingle();
 
+  // PGRST116 means not found with maybeSingle. Ignore it.
   if (byUserIdError && byUserIdError.code !== "PGRST116") throw byUserIdError;
   if (byUserId) return byUserId;
 
+  // Fallback by email if present
   if (!user.email) return null;
 
   const { data: byEmail, error: byEmailError } = await supabase
     .from("admin_members")
-    .select<AdminMemberRow>(ADMIN_MEMBER_SELECT)
+    .select(ADMIN_MEMBER_SELECT)
     .eq("email", user.email.toLowerCase())
     .maybeSingle();
 
@@ -120,8 +128,11 @@ export async function syncAdminProfileFromSupabase(): Promise<AdminProfile | nul
 
     if (!row.user_id) {
       try {
-        await supabase.from("admin_members").update({ user_id: user.id }).eq("id", row.id);
-        row.user_id = user.id;
+        const { error: updErr } = await supabase
+          .from("admin_members")
+          .update({ user_id: user.id })
+          .eq("id", row.id);
+        if (!updErr) row.user_id = user.id;
       } catch (updateErr) {
         console.warn("Failed to backfill admin user_id", updateErr);
       }
@@ -131,20 +142,20 @@ export async function syncAdminProfileFromSupabase(): Promise<AdminProfile | nul
     saveAdminSession(profile);
     return profile;
   } catch (err) {
-    console.error("Failed to synchronise admin profile", err);
+    console.error("Failed to synchronize admin profile", err);
     return loadAdminSession();
   }
 }
 
 export function useAuth() {
   const [userRole, setUserRole] = useState<AdminRole | null>(() => {
-    if (typeof window === 'undefined') return null;
+    if (typeof window === "undefined") return null;
     return (localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null) ?? null;
   });
   const [loading, setLoading] = useState(true);
 
   const syncRole = useCallback(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       setLoading(false);
       return;
     }
@@ -157,11 +168,10 @@ export function useAuth() {
     let active = true;
 
     const initialise = async () => {
-      if (typeof window === 'undefined') {
+      if (typeof window === "undefined") {
         setLoading(false);
         return;
       }
-
       await syncAdminProfileFromSupabase();
       if (!active) return;
       syncRole();
@@ -169,29 +179,37 @@ export function useAuth() {
 
     initialise();
 
-    if (typeof window === 'undefined') return () => {
-      active = false;
-    };
+    if (typeof window === "undefined") {
+      return () => {
+        active = false;
+      };
+    }
 
     const handleStorage = (event: StorageEvent) => {
-      if (!event.key || event.key === ADMIN_ROLE_KEY || event.key === ADMIN_PROFILE_KEY) {
+      if (
+        !event.key ||
+        event.key === ADMIN_ROLE_KEY ||
+        event.key === ADMIN_PROFILE_KEY
+      ) {
         syncRole();
       }
     };
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(async () => {
-      if (!active) return;
-      await syncAdminProfileFromSupabase();
-      if (!active) return;
-      syncRole();
-    });
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async () => {
+        if (!active) return;
+        await syncAdminProfileFromSupabase();
+        if (!active) return;
+        syncRole();
+      }
+    );
 
-    window.addEventListener('storage', handleStorage);
+    window.addEventListener("storage", handleStorage);
     window.addEventListener(ADMIN_SESSION_EVENT, syncRole as EventListener);
 
     return () => {
       active = false;
-      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener("storage", handleStorage);
       window.removeEventListener(ADMIN_SESSION_EVENT, syncRole as EventListener);
       authListener?.subscription.unsubscribe();
     };

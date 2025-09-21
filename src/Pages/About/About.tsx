@@ -15,6 +15,12 @@ import {
   Sparkles,
 } from "lucide-react";
 import LiveChat from "@/components/Home/LiveChat";
+import MissionImpact from "@/components/About/MissionImpact";
+import TeamAdvisors from "@/components/About/TeamAdvisors";
+import PartnersSection from "@/components/About/Partners";
+import SafetyPrivacy from "@/components/About/SafetyPrivacy";
+import MediaContact from "@/components/About/MediaContact";
+import SOSButton from "@/components/utils/SOSButton";
 
 const values = [
   {
@@ -223,6 +229,18 @@ export default function About() {
           </div>
         </section>
 
+        {/* Mission & Impact */}
+        <MissionImpact />
+
+        {/* Team & Advisors */}
+        <TeamAdvisors />
+
+        {/* Partners */}
+        <PartnersSection />
+
+        {/* Safety & Privacy */}
+        <SafetyPrivacy />
+
         {/* CTA */}
         <section className="mb-8">
           <Card className="border-primary/20">
@@ -244,7 +262,10 @@ export default function About() {
             </CardContent>
           </Card>
         </section>
+        {/* Media & Contact */}
+        <MediaContact />
       </main>
+      <SOSButton/>
       <LiveChat/>
       <Footer />
     </div>

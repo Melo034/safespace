@@ -11,6 +11,11 @@ const sidebarNavItems = [
         href: "/account/profile",
     },
     {
+        title: "Settings",
+        icon: <Shield className="h-4 w-4" />,
+        href: "/account/settings",
+    },
+    {
         title: "Security",
         icon: <Shield className="h-4 w-4" />,
         href: "/account/password-settings",
@@ -24,6 +29,11 @@ const sidebarNavItems = [
         title: "New Story",
         icon: <SquarePen className="h-4 w-4" />,
         href: "/account/my-stories/new",
+    },
+    {
+        title: "Saved Items",
+        icon: <BookAIcon className="h-4 w-4" />,
+        href: "/account/saved",
     },
 ];
 

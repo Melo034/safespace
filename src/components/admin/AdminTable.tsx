@@ -12,7 +12,7 @@ interface AdminTableProps {
   isDeleting: string | null;
   handleViewAdmin: (admin: Admin) => void;
   handleEditClick: (admin: Admin) => void;
-  handleDeleteAdmin: (user_id: string) => void;
+  handleDeleteAdmin: (adminId: string) => void;
   canPerformAction: (action: "edit" | "delete", targetRole: string) => boolean;
 }
 
@@ -64,7 +64,7 @@ const AdminTable: React.FC<AdminTableProps> = ({
       </TableHeader>
       <TableBody>
         {admins.map((admin) => (
-          <TableRow key={admin.user_id}>
+          <TableRow key={admin.id}>
             <TableCell>
               <div className="flex items-center gap-3">
                 <Avatar className="w-16 h-16 object-cover border-primary border-2">
@@ -116,11 +116,11 @@ const AdminTable: React.FC<AdminTableProps> = ({
                   size="sm"
                   variant="outline"
                   className="rounded-full"
-                  onClick={() => handleDeleteAdmin(admin.user_id)}
-                  disabled={isDeleting === admin.user_id || !canPerformAction("delete", admin.role)}
+                  onClick={() => handleDeleteAdmin(admin.id)}
+                  disabled={isDeleting === admin.id || !canPerformAction("delete", admin.role)}
                   aria-label={`Delete ${admin.name}`}
                 >
-                  {isDeleting === admin.user_id ? <Loading /> : <Trash2 className="h-4 w-4" />}
+                  {isDeleting === admin.id ? <Loading /> : <Trash2 className="h-4 w-4" />}
                 </Button>
               </div>
             </TableCell>

@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,7 @@ import type { PostgrestError } from "@supabase/supabase-js";
 import Loading from "@/components/utils/Loading";
 import type { Story as StoryType, Comment } from "@/lib/types";
 import LiveChat from "@/components/Home/LiveChat";
-import SOSButton from "@/components/utils/SOSButton";
+import { usePreferences } from "@/hooks/usePreferences";
 
 const commentSchema = z.object({
   content: z
@@ -95,6 +96,20 @@ export default function Story() {
   const [hasMore, setHasMore] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [related, setRelated] = useState<Array<{ id: string; title: string; created_at: string }>>([]);
+
+  const readingMinutes = useMemo(() => {
+    const text = (story?.full_content || story?.content || "").trim();
+    if (!text) return 1;
+    const words = text.split(/\s+/).filter(Boolean).length;
+    return Math.max(1, Math.ceil(words / 200));
+  }, [story?.full_content, story?.content]);
+
+  const contentWarnings = useMemo(() => {
+    return (story?.tags || [])
+      .filter((t) => typeof t === "string" && t.toLowerCase().startsWith("cw:"))
+      .map((t) => t.slice(3));
+  }, [story?.tags]);
 
   // Route in App.tsx uses "/stories/:id"; read param as id
   const { id: idParam } = useParams();
@@ -562,6 +577,44 @@ export default function Story() {
     }
   };
 
+  useEffect(() => {
+    if (!story?.id || !story?.tags?.length) {
+      setRelated([]);
+      return;
+    }
+
+    let isActive = true;
+
+    const loadRelated = async () => {
+      const firstTag = story.tags[0];
+      if (!firstTag) return;
+
+      const { data, error } = await supabase
+        .from("stories")
+        .select("id,title,tags,created_at")
+        .neq("id", story.id)
+        .contains("tags", [firstTag])
+        .order("created_at", { ascending: false })
+        .limit(4);
+
+      if (!error && isActive) {
+        setRelated(
+          (data || []).map((r: { id: string; title: string | null; created_at: string | null }) => ({
+            id: r.id,
+            title: r.title || "Untitled",
+            created_at: r.created_at || new Date().toISOString(),
+          }))
+        );
+      }
+    };
+
+    void loadRelated();
+
+    return () => {
+      isActive = false;
+    };
+  }, [story?.id, story?.tags]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
@@ -596,11 +649,26 @@ export default function Story() {
     );
   }
 
+  // derive simple markdown-like headings for TOC
+  const toc = useMemo(() => {
+    const src = (story?.full_content || story?.content || "").split(/\n+/);
+    const items: Array<{ level: 1 | 2 | 3; text: string; id: string }> = [];
+    const slug = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
+    for (const line of src) {
+      const t = line.trim();
+      if (t.startsWith("### ")) items.push({ level: 3, text: t.slice(4), id: slug(t.slice(4)) });
+      else if (t.startsWith("## ")) items.push({ level: 2, text: t.slice(3), id: slug(t.slice(3)) });
+      else if (t.startsWith("# ")) items.push({ level: 1, text: t.slice(2), id: slug(t.slice(2)) });
+    }
+    return items;
+  }, [story?.full_content, story?.content]);
+  const { prefs } = usePreferences();
+
   return (
     <div className="min-h-screen bg-background">
       <ReadingProgress target="#story-content" />
       <Navbar />
-      <main className="relative container mx-auto px-4 py-10">
+      <main id="main" className="relative container mx-auto px-4 py-10">
         <div className="max-w-4xl mx-auto mb-6">
           <Button variant="ghost" asChild>
             <Link to="/stories" className="mb-4" aria-label="Back to stories">
@@ -610,7 +678,18 @@ export default function Story() {
           </Button>
         </div>
 
-        <div id="story-content" className="max-w-4xl mx-auto">
+        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-8">
+          <div id="story-content" className="max-w-4xl w-full">
+          {contentWarnings.length > 0 && prefs.privacy.contentWarnings !== "hide" && (
+            <Card className="mb-4 border-destructive/20 bg-destructive/5">
+              <CardHeader>
+                <CardTitle className="text-sm text-destructive">Content warning</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{contentWarnings.join(", ")}</p>
+              </CardContent>
+            </Card>
+          )}
           <Card className="mb-8 rounded-xl shadow-sm">
             <CardHeader>
               <div className="flex items-start justify-between mb-4">
@@ -650,6 +729,7 @@ export default function Story() {
                           addSuffix: true,
                         })}
                       </span>
+                      <span>• {readingMinutes} min read</span>
                     </div>
                   </div>
                 </div>
@@ -712,15 +792,45 @@ export default function Story() {
               <div className="prose prose-lg max-w-none mb-8">
                 {(story.full_content || story.content)
                   .split("\n\n")
-                  .map((paragraph, index) => (
-                    <p
-                      key={index}
-                      className="mb-4 leading-relaxed text-foreground animate-fade-in-up"
-                      style={{ animationDelay: `${Math.min(index, 12) * 60}ms` }}
-                    >
-                      {paragraph}
-                    </p>
-                  ))}
+                  .map((block, index) => {
+                    const t = block.trim();
+                    if (t.startsWith("### ")) {
+                      const text = t.slice(4);
+                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
+                      return (
+                        <h3 id={id} key={index} className="scroll-mt-20">
+                          {text}
+                        </h3>
+                      );
+                    }
+                    if (t.startsWith("## ")) {
+                      const text = t.slice(3);
+                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
+                      return (
+                        <h2 id={id} key={index} className="scroll-mt-20">
+                          {text}
+                        </h2>
+                      );
+                    }
+                    if (t.startsWith("# ")) {
+                      const text = t.slice(2);
+                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
+                      return (
+                        <h1 id={id} key={index} className="scroll-mt-20">
+                          {text}
+                        </h1>
+                      );
+                    }
+                    return (
+                      <p
+                        key={index}
+                        className="mb-4 leading-relaxed text-foreground animate-fade-in-up"
+                        style={{ animationDelay: `${Math.min(index, 12) * 60}ms` }}
+                      >
+                        {block}
+                      </p>
+                    );
+                  })}
               </div>
               <div className="flex items-center justify-between pt-6 border-t">
                 <div className="flex space-x-2">
@@ -864,6 +974,23 @@ export default function Story() {
             </CardContent>
           </Card>
 
+          {related.length > 0 && (
+            <Card className="mt-8">
+              <CardHeader>
+                <CardTitle className="text-base">Related Stories</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-2">
+                  {related.map((r) => (
+                    <Button key={r.id} asChild variant="outline" size="sm" className="justify-start">
+                      <Link to={`/stories/${r.id}`}>{r.title}</Link>
+                    </Button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <Card className="mt-8 border-primary/20 bg-primary/5">
             <CardHeader>
               <CardTitle className="flex items-center space-x-2 text-primary">
@@ -877,9 +1004,37 @@ export default function Story() {
               </p>
             </CardContent>
           </Card>
+          </div>
+
+          {/* Table of contents */}
+          {toc.length >= 3 && (
+            <div className="hidden lg:block">
+              <Card className="sticky top-24 max-h-[70vh]">
+                <CardHeader>
+                  <CardTitle className="text-sm">Table of contents</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ScrollArea className="h-[50vh] pr-2">
+                    <nav aria-label="Table of contents" className="space-y-1 text-sm">
+                      {toc.map((h, i) => (
+                        <a
+                          key={`${h.id}-${i}`}
+                          href={`#${h.id}`}
+                          className={`block rounded px-2 py-1 hover:bg-muted transition ${
+                            h.level === 1 ? "font-semibold" : h.level === 2 ? "ml-2" : "ml-4 text-muted-foreground"
+                          }`}
+                        >
+                          {h.text}
+                        </a>
+                      ))}
+                    </nav>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </div>
       </main>
-      <SOSButton/>
       <LiveChat/>
       <Footer />
     </div>

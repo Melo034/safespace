@@ -55,6 +55,7 @@ const StatCard = ({
   bgColor,
   color,
 }: StatCardProps) => (
+
   <Card className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
     <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-primary/10 blur-2xl transition group-hover:bg-primary/20" />
     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -106,57 +107,72 @@ const Dashboard = () => {
       setLoading(true);
 
       const [
-        { count: totalReports, error: reportsError },
-        { count: inProgressReports, error: inProgressError },
-        { count: criticalReports, error: criticalError },
-        { count: resolvedReports, error: resolvedError },
-        { count: totalStories, error: storiesError },
-        { count: totalMembers, error: membersError },
-        { count: totalComments, error: commentsError },
-        { count: totalAdmins, error: adminsError },
-        { count: alertsCount, error: alertsCountError },
+        reportsRes,
+        inProgRes,
+        criticalRes,
+        resolvedRes,
+        storiesRes,
+        membersRes,
+        commentsRes,
+        adminListRes,
+        alertsCountRes,
       ] = await Promise.all([
         supabase.from("reports").select("*", { count: "exact", head: true }),
-        supabase
-          .from("reports")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "In Progress"),
-        supabase
-          .from("reports")
-          .select("*", { count: "exact", head: true })
-          .in("priority", ["High", "Critical"]),
-        supabase
-          .from("reports")
-          .select("*", { count: "exact", head: true })
-          .eq("status", "Resolved"),
+        supabase.from("reports").select("*", { count: "exact", head: true }).eq("status", "In Progress"),
+        supabase.from("reports").select("*", { count: "exact", head: true }).in("priority", ["High", "Critical"]),
+        supabase.from("reports").select("*", { count: "exact", head: true }).eq("status", "Resolved"),
         supabase.from("stories").select("*", { count: "exact", head: true }),
         supabase.from("community_members").select("*", { count: "exact", head: true }),
         supabase.from("comments").select("*", { count: "exact", head: true }),
-        supabase.from("admin_members").select("*", { count: "exact", head: true }),
+        // ここを RPC に変更
+        supabase.rpc("admin_list", {
+          p_search: null,
+          p_status: null,
+          p_role: null,
+          p_from: 0,
+          p_to: 0,     // 1件だけ返す。total_count を読む
+        }),
         supabase
           .from("reports")
           .select("*", { count: "exact", head: true })
-          .in("status", ["Open", "In Progress"]) 
+          .in("status", ["Open", "In Progress"])
           .in("priority", ["High", "Critical"]),
       ]);
 
-      if (reportsError || inProgressError || criticalError || resolvedError || storiesError || membersError || commentsError || adminsError || alertsCountError) {
-        throw new Error("Failed to fetch some data");
-      }
+      // エラー確認
+      const errors = [
+        reportsRes.error,
+        inProgRes.error,
+        criticalRes.error,
+        resolvedRes.error,
+        storiesRes.error,
+        membersRes.error,
+        commentsRes.error,
+        adminListRes.error,
+        alertsCountRes.error,
+      ].filter(Boolean);
+      if (errors.length) throw errors[0];
+
+      // 管理者数は RPC の total_count から取得
+      const totalAdmins =
+        Array.isArray(adminListRes.data) && adminListRes.data.length > 0
+          ? Number(adminListRes.data[0].total_count)
+          : 0;
 
       setStats({
-        totalReports: totalReports || 0,
-        inProgressReports: inProgressReports || 0,
-        criticalReports: criticalReports || 0,
-        resolvedReports: resolvedReports || 0,
-        totalStories: totalStories || 0,
-        totalMembers: totalMembers || 0,
-        totalComments: totalComments || 0,
-        totalAdmins: totalAdmins || 0,
+        totalReports: reportsRes.count || 0,
+        inProgressReports: inProgRes.count || 0,
+        criticalReports: criticalRes.count || 0,
+        resolvedReports: resolvedRes.count || 0,
+        totalStories: storiesRes.count || 0,
+        totalMembers: membersRes.count || 0,
+        totalComments: commentsRes.count || 0,
+        totalAdmins,
       });
 
-      setTotalAlerts(alertsCount || 0);
+      setTotalAlerts(alertsCountRes.count || 0);
 
+      // 以下は既存のアラート読み込み処理（そのまま）
       let alertsQuery = supabase
         .from("reports")
         .select("id,title,description,type,priority,status,location,created_at")
@@ -165,27 +181,22 @@ const Dashboard = () => {
         .order("created_at", { ascending: false })
         .range((page - 1) * itemsPerPage, page * itemsPerPage - 1);
 
-      if (page > 1 && lastId) {
-        alertsQuery = alertsQuery.lt("id", lastId);
-      }
+      if (page > 1 && lastId) alertsQuery = alertsQuery.lt("id", lastId);
 
       const { data: fetchedAlerts, error: alertsError } = await alertsQuery;
       if (alertsError) throw alertsError;
 
-      const alertsData = (fetchedAlerts || []).map(
-        (alert) =>
-          ({
-            id: alert.id,
-            title: alert.title || "Untitled",
-            message: alert.description || "",
-            type: alert.type || IncidentType.Other,
-            priority: alert.priority || "Medium",
-            status: alert.status || "Open",
-            location: alert.location || "Unknown",
-            timestamp: alert.created_at || new Date().toISOString(),
-            reportId: alert.id,
-          }) as DashAlert
-      );
+      const alertsData = (fetchedAlerts || []).map((alert) => ({
+        id: alert.id,
+        title: alert.title || "Untitled",
+        message: alert.description || "",
+        type: alert.type || IncidentType.Other,
+        priority: alert.priority || "Medium",
+        status: alert.status || "Open",
+        location: alert.location || "Unknown",
+        timestamp: alert.created_at || new Date().toISOString(),
+        reportId: alert.id,
+      })) as DashAlert[];
       setAlerts(alertsData);
       setLastId(fetchedAlerts?.[fetchedAlerts.length - 1]?.id || null);
 
@@ -196,16 +207,13 @@ const Dashboard = () => {
         .limit(5);
       if (activityError) throw activityError;
 
-      const recentActivityData = (activityData || []).map(
-        (a) =>
-          ({
-            id: a.id,
-            message: a.message || "",
-            type: a.type || "report",
-            status: a.status || "unknown",
-            time: a.created_at || new Date().toISOString(),
-          }) as DashActivity
-      );
+      const recentActivityData = (activityData || []).map((a) => ({
+        id: a.id,
+        message: a.message || "",
+        type: a.type || "report",
+        status: a.status || "unknown",
+        time: a.created_at || new Date().toISOString(),
+      })) as DashActivity[];
       setRecentActivity(recentActivityData);
     } catch (e) {
       console.error(e);
@@ -275,15 +283,15 @@ const Dashboard = () => {
               prev.map((a) =>
                 a.id === newAlert.id
                   ? {
-                      ...a,
-                      status: newAlert.status,
-                      priority: newAlert.priority,
-                      title: newAlert.title,
-                      message: newAlert.message,
-                      location: newAlert.location,
-                      timestamp: newAlert.timestamp,
-                      type: newAlert.type,
-                    }
+                    ...a,
+                    status: newAlert.status,
+                    priority: newAlert.priority,
+                    title: newAlert.title,
+                    message: newAlert.message,
+                    location: newAlert.location,
+                    timestamp: newAlert.timestamp,
+                    type: newAlert.type,
+                  }
                   : a
               )
             );

@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, ArrowLeft, ArrowRight, Eye } from "lucide-react";
+import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, Eye } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import LiveChat from "@/components/Home/LiveChat";
 import type { ReportType } from "@/lib/types";
@@ -35,9 +35,7 @@ const Report = () => {
   });
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
-  const [masked, setMasked] = useState(false);
 
 
   const onDrop = useCallback((accepted: File[]) => {
@@ -280,15 +278,6 @@ const Report = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      {/* Safety: optional screen mask overlay and quick toggle */}
-      {masked && (
-        <div className="fixed inset-0 z-50 backdrop-blur-sm bg-black/10 pointer-events-none" />
-      )}
-      <div className="fixed top-20 right-4 z-50">
-        <Button size="sm" variant="outline" onClick={() => setMasked((m) => !m)}>
-          {masked ? "Unmask" : "Mask Screen"}
-        </Button>
-      </div>
       <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-4xl mx-auto mb-8">
           <div className="text-center mb-8">
@@ -302,24 +291,6 @@ const Report = () => {
               Your safety and privacy come first. Share details securely and access the right support.
             </p>
           </div>
-
-          {/* Step indicator */}
-          <Card className="mb-6">
-            <CardContent className="pt-6 flex items-center justify-between">
-              <div className="text-sm">
-                <span className="font-medium">Step {step} of 3</span>
-                <span className="text-muted-foreground ml-2">(Your Details → Incident → Evidence & Consent)</span>
-              </div>
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" size="sm" onClick={() => setStep((s)=> (s>1 ? ((s-1) as 1|2|3) : s))} disabled={step===1}>
-                  <ArrowLeft className="h-4 w-4 mr-2" /> Back
-                </Button>
-                <Button type="button" size="sm" onClick={() => setStep((s)=> (s<3 ? ((s+1) as 1|2|3) : s))} disabled={step===3}>
-                  Next <ArrowRight className="h-4 w-4 ml-2" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
 
           {/* Guidance */}
           <Card className="mb-6">
@@ -409,7 +380,7 @@ const Report = () => {
             </CardHeader>
             <CardContent>
               <form id="report-form" onSubmit={handleSubmit} className="space-y-8">
-                <div className={step === 1 ? "space-y-3" : "hidden"}>
+                <div className="space-y-3">
                   <Label htmlFor="anonymous" className="flex items-center gap-2 text-sm">
                     <Checkbox
                       id="anonymous"
@@ -422,7 +393,7 @@ const Report = () => {
                   <p className="text-xs text-muted-foreground">We won’t collect your identity if you choose to remain anonymous.</p>
                 </div>
 
-                {!isAnonymous && step === 1 && (
+                {!isAnonymous && (
                   <div>
                     <h3 className="text-sm font-medium text-muted-foreground mb-3">Your Details</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -487,7 +458,7 @@ const Report = () => {
                   </div>
                 )}
 
-                <div className={step === 2 ? "space-y-2" : "hidden"}>
+                <div className="space-y-2">
                   <Label htmlFor="reportType">Incident Type <span className="text-destructive">*</span></Label>
                   <Select value={reportType} onValueChange={(value) => setReportType(value as ReportType["type"] | "")}>
                     <SelectTrigger>
@@ -515,7 +486,6 @@ const Report = () => {
                   <p className="text-xs text-muted-foreground">Avoid sharing sensitive details that could reveal your identity if you prefer anonymity.</p>
                 </div>
 
-                {step === 2 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="incidentDate">Date of Incident <span className="text-destructive">*</span></Label>
@@ -546,7 +516,6 @@ const Report = () => {
                     </div>
                   </div>
                 </div>
-                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -620,14 +589,6 @@ const Report = () => {
                 <Button type="submit"  disabled={isSubmitting}>
                   {isSubmitting ? "Submitting..." : "Submit Report"}
                 </Button>
-                {/* Step 3 submit area */}
-                {step === 3 && (
-                  <div className="flex justify-end">
-                    <Button type="submit" disabled={isSubmitting}>
-                      {isSubmitting ? "Submitting..." : "Submit Report"}
-                    </Button>
-                  </div>
-                )}
               </form>
             </CardContent>
           </Card>

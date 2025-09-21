@@ -1,8 +1,10 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import { Toaster } from "sonner";
 import Loading from "./components/utils/Loading";
 import RequireAdmin from "@/components/admin/RequireAdmin";
+import SOSButton from "@/components/utils/SOSButton";
+import QuickExit from "@/components/utils/QuickExit";
 
 // Route-based code splitting (lazy loading)
 const Home = lazy(() => import("./Pages/Home/Home"));
@@ -29,6 +31,8 @@ const Story = lazy(() => import("./Pages/Stories/[Stories]/Story"));
 const CommunityLogout = lazy(() => import("./Pages/Auth/CommunityLogin/CommunityLogout"));
 const Profile = lazy(() => import("./Pages/Users/Profile/Profile"));
 const PasswordSettings = lazy(() => import("./Pages/Users/Settings/PasswordSettings"));
+const Settings = lazy(() => import("./Pages/Users/Settings/Settings"));
+const Saved = lazy(() => import("./Pages/Users/Saved/Saved"));
 const MyStories = lazy(() => import("./Pages/Users/Stories/MyStories"));
 const SubmitStory = lazy(() => import("./Pages/Users/Stories/SubmitStory"));
 const EditStory = lazy(() => import("./Pages/Users/Stories/EditStory"));
@@ -36,6 +40,9 @@ const About = lazy(() => import("./Pages/About/About"));
 const Unauthorized = lazy(() => import("./Pages/Unauthorized"));
 
 function App() {
+  const location = useLocation();
+  const path = location.pathname || "";
+  const hideSos = path.startsWith("/admin") || path === "/auth/login";
   return (
     <>
       <Toaster richColors position="top-center" closeButton={true} />
@@ -67,10 +74,12 @@ function App() {
         <Route path="/auth/logout" element={<CommunityLogout />} />
         <Route path="/unauthorized" element={<Unauthorized />} />
         <Route path="/account/profile" element={<Profile />} />
+        <Route path="/account/settings" element={<Settings />} />
         <Route path="/account/password-settings" element={<PasswordSettings />} />
         <Route path="/account/my-stories" element={<MyStories />} />
         <Route path="/account/my-stories/new" element={<SubmitStory />} />
         <Route path="/account/my-stories/:id/edit" element={<EditStory />} />
+        <Route path="/account/saved" element={<Saved />} />
 
         {/* Admin Login Route */}
         <Route path="/admin/login" element={<AdminLogin />} />
@@ -97,7 +106,9 @@ function App() {
           }
         />
       </Routes>
-    </Suspense >
+        </Suspense >
+    {!hideSos && <SOSButton />}
+    <QuickExit />
     </div>
     </>
   );

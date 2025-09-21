@@ -1,4 +1,4 @@
-// src/components/admin/AdminDialogs.tsx
+﻿// src/components/admin/AdminDialogs.tsx
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +47,7 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
   resetForm,
 }) => {
   const [showPassword, setShowPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const getRoleColor = (role: Admin["role"]) => {
     switch (role) {
       case "super_admin": return "bg-purple-500";
@@ -70,20 +71,23 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
       {/* Add Admin Dialog */}
       <Dialog open={isAddDialogOpen} onOpenChange={(open) => {
         setIsAddDialogOpen(open);
-        if (!open) resetForm();
+        if (!open) {
+          resetForm();
+          setShowPassword(false);
+        }
       }}>
         <DialogContent className="max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle>Add New Admin</DialogTitle>
             <DialogDescription>
-              Provide admin details and role. Either paste the user's auth UID, or leave it blank to add by email.
+              Provide admin details and role. Leave the user ID blank to auto-generate one.
               Admins must be different from community members.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <Input
-              placeholder="User ID (auth uid) — optional"
-              value={formData.user_id}
+              placeholder="User ID (optional)"
+              value={formData.user_id ?? ""}
               onChange={(e) => setFormData({ ...formData, user_id: e.target.value })}
               aria-label="User ID"
             />
@@ -130,7 +134,7 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 required
                 aria-invalid={!!formErrors.password}
-                aria-describedby={formErrors.password ? "password-error" : undefined}
+                aria-describedby={formErrors.password ? "add-password-error" : undefined}
               />
               <Button
                 type="button"
@@ -144,7 +148,7 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
             </div>
-            {formErrors.password && <p id="password-error" className="text-red-500 text-sm mt-1">{formErrors.password}</p>}
+            {formErrors.password && <p id="add-password-error" className="text-red-500 text-sm mt-1">{formErrors.password}</p>}
             <Select
               value={formData.role}
               onValueChange={(value) => setFormData({ ...formData, role: value as "admin" | "super_admin" | "moderator" })}
@@ -183,7 +187,10 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
       {/* Edit Admin Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
         setIsEditDialogOpen(open);
-        if (!open) resetForm();
+        if (!open) {
+          resetForm();
+          setShowNewPassword(false);
+        }
       }}>
         <DialogContent className="max-w-md rounded-xl">
           <DialogHeader>
@@ -226,6 +233,29 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
               aria-describedby={formErrors.email ? "email-error" : undefined}
             />
             {formErrors.email && <p id="email-error" className="text-red-500 text-sm mt-1">{formErrors.email}</p>}
+            <div className="relative">
+              <Input
+                placeholder="New password (optional)"
+                type={showNewPassword ? "text" : "password"}
+                value={formData.password ?? ""}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                aria-invalid={!!formErrors.password}
+                aria-describedby={formErrors.password ? "edit-password-error" : undefined}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-1 top-1/2 -translate-y-1/2"
+                onClick={() => setShowNewPassword((prev) => !prev)}
+                aria-label={showNewPassword ? "Hide new password" : "Show new password"}
+                aria-pressed={showNewPassword}
+              >
+                {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+            {formErrors.password && <p id="edit-password-error" className="text-red-500 text-sm mt-1">{formErrors.password}</p>}
+            <p className="text-xs text-muted-foreground">Leave blank to keep current password.</p>
             <Select
               value={formData.role}
               onValueChange={(value) => setFormData({ ...formData, role: value as "admin" | "super_admin" | "moderator" })}
@@ -305,3 +335,5 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
 };
 
 export default AdminDialogs;
+
+

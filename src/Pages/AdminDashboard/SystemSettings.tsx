@@ -80,9 +80,10 @@ const SystemSettings = () => {
       console.error("Error fetching settings:", err);
       const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: string }).code : undefined;
       const msg = typeof err === "object" && err !== null && "message" in err ? (err as { message?: string }).message : undefined;
-      if (code === "42P01" || String(msg).toLowerCase().includes("public.user_roles")) {
-        toast.error("Database is missing view public.user_roles required by settings policies. See console for SQL fix.");
-        console.warn("Run this SQL in Supabase:\nCREATE VIEW public.user_roles AS\n  SELECT user_id, role::text FROM public.admin_members;\n-- Or update settings policies to reference admin_members directly.");
+      if (code === "42P01") {
+        toast.error("Settings table is missing. Run the latest database migrations.");
+      } else if (code === "42501") {
+        toast.error("You do not have permission to view system settings.");
       } else {
         const errorMessage = msg || "Failed to load settings.";
         toast.error(errorMessage);
@@ -172,8 +173,8 @@ const SystemSettings = () => {
       const errorMessage = typeof err === "object" && err !== null && "message" in err ? (err as { message?: string }).message : "Failed to save settings.";
       if (errorCode === "42501") {
         toast.error("You lack permission to save settings.");
-      } else if (errorCode === "42P01" || String(errorMessage).toLowerCase().includes("public.user_roles")) {
-        toast.error("Missing view public.user_roles in DB. Create it or update settings policies.");
+      } else if (errorCode === "42P01") {
+        toast.error("Settings table is missing. Run the latest database migrations.");
       } else {
         toast.error(errorMessage);
       }

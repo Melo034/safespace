@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Clock, Eye, Heart, MessageCircle, Shield, ThumbsUp, Search as SearchIcon, Sparkles } from "lucide-react";
+import { Clock, Eye, Heart, MessageCircle, Shield, ThumbsUp, Search as SearchIcon, Sparkles, Bookmark } from "lucide-react";
+import { useSavedItems } from "@/hooks/useSavedItems";
 import { toast } from "sonner";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import type { PostgrestError } from "@supabase/supabase-js";
@@ -67,6 +68,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [likeLoading, setLikeLoading] = useState<string | null>(null);
   const navigate = useNavigate();
+  const { isSaved: isSavedFn, toggle: toggleSaved } = useSavedItems();
 
   useEffect(() => {
     if (propStory || !storyId) return;
@@ -265,46 +267,71 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
 
   const toggleLike = async () => {
     if (!story) return;
-    setLikeLoading(story.id);
+    const storyId = story.id;
+    const previousLiked = story.is_liked;
+    const previousLikes = story.likes;
+
+    setLikeLoading(storyId);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      const user = data?.user ?? null;
       if (!user) {
         toast.error("Login required.");
         navigate("/auth/login");
         return;
       }
 
-      const nextLiked = !story.is_liked;
-      // optimistic update
-      setStory(s => s ? { ...s, is_liked: nextLiked, likes: s.likes + (nextLiked ? 1 : -1) } : s);
+      const nextLiked = !previousLiked;
+
+      setStory((current) => {
+        if (!current || current.id !== storyId) return current;
+        const adjustedLikes = Math.max(0, current.likes + (nextLiked ? 1 : -1));
+        return { ...current, is_liked: nextLiked, likes: adjustedLikes };
+      });
 
       if (nextLiked) {
-        const { data: { user } } = await supabase.auth.getUser();
         const { error } = await supabase
           .from("story_likes")
-          .insert([{ story_id: story.id, user_id: user!.id }]);
+          .insert({ story_id: storyId, user_id: user.id });
         if (error && (error as { code?: string }).code !== "23505") {
-          // rollback
-          setStory(s => s ? { ...s, is_liked: false, likes: Math.max(0, s.likes - 1) } : s);
+          setStory((current) => {
+            if (!current || current.id !== storyId) return current;
+            return { ...current, is_liked: previousLiked, likes: previousLikes };
+          });
           const errObj = error as PostgrestError;
           const msg = errObj?.message || errObj?.hint || errObj?.details || "Like failed.";
           toast.error("Like failed", { description: msg });
         }
       } else {
-        const { data: { user } } = await supabase.auth.getUser();
         const { error } = await supabase
           .from("story_likes")
           .delete()
-          .eq("story_id", story.id)
-          .eq("user_id", user?.id ?? "");
+          .eq("story_id", storyId)
+          .eq("user_id", user.id);
         if (error) {
-          // rollback
-          setStory(s => s ? { ...s, is_liked: true, likes: s.likes + 1 } : s);
+          setStory((current) => {
+            if (!current || current.id !== storyId) return current;
+            return { ...current, is_liked: previousLiked, likes: previousLikes };
+          });
           const errObj = error as PostgrestError;
           const msg = errObj?.message || errObj?.hint || errObj?.details || "Unlike failed.";
           toast.error("Unlike failed", { description: msg });
         }
       }
+    } catch (err) {
+      console.error("Failed to toggle like", err);
+      setStory((current) => {
+        if (!current || current.id !== storyId) return current;
+        return { ...current, is_liked: previousLiked, likes: previousLikes };
+      });
+      const message =
+        (typeof err === "object" && err && "message" in err && typeof err.message === "string")
+          ? err.message
+          : undefined;
+      toast.error("Unable to update like. Please try again.", {
+        description: message,
+      });
     } finally {
       setLikeLoading(null);
     }
@@ -442,6 +469,14 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
             >
               <ThumbsUp className={`h-4 w-4 ${story.is_liked ? "fill-blue-500 text-blue-500" : ""}`} />
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={(e) => { e.preventDefault(); try { toggleSaved("stories", story.id); } catch {} }}
+              aria-label={isSavedFn("stories", story.id) ? `Unsave ${story.title}` : `Save ${story.title}`}
+            >
+              <Bookmark className={`h-4 w-4 ${isSavedFn("stories", story.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+            </Button>
             <Link
               to={`/stories/${story.id}`}
               className="text-primary underline-offset-2 hover:underline"
@@ -459,7 +494,6 @@ import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import Loading from "@/components/utils/Loading";
 import LiveChat from "@/components/Home/LiveChat";
-import SOSButton from "@/components/utils/SOSButton";
 
 type ListItem = { id: string };
 
@@ -552,7 +586,7 @@ export default function Stories() {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <main className="flex-1 relative container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main" className="flex-1 relative container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center mb-8">
           <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> Community Stories
@@ -640,7 +674,6 @@ export default function Stories() {
           </>
         )}
       </main>
-      <SOSButton/>
       <LiveChat/>
       <Footer />
     </div>

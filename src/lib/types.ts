@@ -1,5 +1,6 @@
 export interface Admin {
-  user_id: string;
+  id: string;
+  user_id: string | null;
   name: string;
   email: string;
   role: "admin" | "super_admin" | "moderator";
@@ -9,7 +10,7 @@ export interface Admin {
 }
 
 export interface AdminFormData {
-  user_id: string;
+  user_id?: string;
   name: string;
   email: string;
   role: "admin" | "super_admin" | "moderator";

@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, ExternalLink, FileText, Globe, Search, Filter, Heart, BookOpen, Scale, Shield, Phone, Sparkles } from "lucide-react";
+import { Download, ExternalLink, FileText, Globe, Search, Filter, Heart, BookOpen, Scale, Shield, Phone, Sparkles, Bookmark } from "lucide-react";
 import { toast } from "sonner";
 import LiveChat from "@/components/Home/LiveChat";
+import { useLocation } from "react-router-dom";
+import ResourceCollections from "@/components/Resources/Collections";
 import type { Resource } from "@/lib/types";
-import SOSButton from "@/components/utils/SOSButton";
+import { useSavedItems } from "@/hooks/useSavedItems";
 
 const categoryIcons = {
   "safety-planning": Shield,
@@ -30,6 +32,8 @@ const Resources = () => {
   const [categoryFilter, setCategoryFilter] = useState<CategoryType | "all">("all");
   const [typeFilter, setTypeFilter] = useState<"all" | "pdf" | "website">("all");
   const [loading, setLoading] = useState(true);
+  const location = useLocation();
+  const { toggle: toggleSaved, isSaved } = useSavedItems();
 
   useEffect(() => {
     const load = async () => {
@@ -84,6 +88,20 @@ const Resources = () => {
     return;
   }, []);
 
+  // Apply Starter Kit from URL (?kit=legal-aid|safety-planning|counseling|emergency|education)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const kit = params.get("kit");
+      const allowed = ["safety-planning", "legal-aid", "counseling", "emergency", "education"] as const;
+      if (kit && (allowed as readonly string[]).includes(kit)) {
+        setCategoryFilter(kit as CategoryType);
+      }
+    } catch {
+      // Intentionally left blank: ignore invalid kit param
+    }
+  }, [location.search]);
+
   const openResource = (resource: Resource) => {
     try {
       if (resource.type === "website") {
@@ -108,12 +126,11 @@ const Resources = () => {
     // Non-blocking; ignore failures (RLS may block public updates)
     type Metric = "downloads" | "views";
     const metric: Metric = resource.type === "pdf" ? "downloads" : "views";
-    const current = (resource as Pick<Resource, Metric>)[metric] ?? 0;
     try {
-      const { error } = await supabase
-        .from("resources")
-        .update({ [metric]: current + 1 })
-        .eq("id", resource.id);
+      const { error } = await supabase.rpc("bump_resource_metric", {
+        _id: resource.id,
+        _metric: metric,
+      });
       if (!error) {
         setResources((prev) =>
           prev.map((r) =>
@@ -148,7 +165,7 @@ const Resources = () => {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <main className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main" className="flex-1 container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="max-w-7xl mx-auto text-center mb-10">
           <span className="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground bg-background/60 backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 mr-1.5 text-primary" /> Curated & Verified
@@ -225,6 +242,7 @@ const Resources = () => {
                             ? `${resource.downloads ?? 0} downloads`
                             : `${resource.views ?? 0} views`}
                         </div>
+                        <div className="flex items-center gap-2">
                         <Button
                           size="sm"
                           onClick={() => handleResourceClick(resource)}
@@ -246,6 +264,15 @@ const Resources = () => {
                             </>
                           )}
                         </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
+                          aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
+                        >
+                          <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                        </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -263,7 +290,7 @@ const Resources = () => {
             </div>
           )}
         </div>
-
+        <ResourceCollections />
         <div className="max-w-6xl mx-auto mb-8">
           <Card>
             <CardHeader>
@@ -385,6 +412,7 @@ const Resources = () => {
                             ? `${resource.downloads ?? 0} downloads`
                             : `${resource.views ?? 0} views`}
                         </div>
+                        <div className="flex items-center gap-2">
                         <Button
                           size="sm"
                           onClick={() => handleResourceClick(resource)}
@@ -406,6 +434,15 @@ const Resources = () => {
                             </>
                           )}
                         </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
+                          aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
+                        >
+                          <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                        </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -424,7 +461,6 @@ const Resources = () => {
           )}
         </div>
       </main>
-      <SOSButton/>
       <LiveChat />
       <Footer />
     </div>

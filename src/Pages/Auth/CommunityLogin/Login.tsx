@@ -96,8 +96,14 @@ const Login = () => {
         .maybeSingle();
       if (adminErr && adminErr.code !== "PGRST116") throw adminErr;
       if (adminRow) {
-        toast.info("Admins must sign in via the admin login.", { duration: 3000 });
-        setTimeout(() => navigate("/admin/login"), 3000);
+        // Prevent being logged into the public experience with an admin account
+        try {
+          await supabase.auth.signOut();
+          localStorage.removeItem(AUTH_KEY);
+          localStorage.removeItem(MEMBER_LATEST_KEY);
+        } catch {}
+        toast.info("This is an admin account. Please use the admin login.");
+        navigate("/admin/login");
         return;
       }
 

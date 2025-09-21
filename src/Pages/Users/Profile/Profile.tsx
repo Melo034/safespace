@@ -278,7 +278,7 @@ const Profile = () => {
   return (
     <>
       <Navbar />
-      <div className="py-20 sm:py-32 container mx-auto px-4 md:px-6 max-w-6xl">
+      <div id="main" className="py-20 sm:py-32 container mx-auto px-4 md:px-6 max-w-6xl">
         <div className="container flex-1 items-start md:grid md:grid-cols-[220px_1fr] md:gap-6 lg:grid-cols-[240px_1fr] lg:gap-10 py-8">
           <Sidebar />
           <main className="flex w-full flex-col overflow-hidden">

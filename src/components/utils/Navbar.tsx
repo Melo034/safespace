@@ -84,6 +84,7 @@ const Navbar = ({
 
   const [isAuthed, setIsAuthed] = useState(seedAuthed);
   const [isCommunityMember, setIsCommunityMember] = useState(seedMember);
+  const [isAdminAccount, setIsAdminAccount] = useState(false);
   const [authReady, setAuthReady] = useState(seedAuthed); // if seeded, treat as ready
 
   // Header scroll shadow
@@ -97,6 +98,7 @@ const Navbar = ({
   const checkCommunityMember = useCallback(async (userId?: string) => {
     if (!userId) {
       setIsCommunityMember(false);
+      setIsAdminAccount(false);
       writeLS(MEMBER_LATEST_KEY, "0");
       return;
     }
@@ -120,6 +122,14 @@ const Navbar = ({
     setIsCommunityMember(isMember);
     writeLS(memberKey(userId), isMember ? "1" : "0");
     writeLS(MEMBER_LATEST_KEY, isMember ? "1" : "0");
+
+    // Also detect admin accounts to avoid prompting them to join community
+    const { data: am, error: amErr } = await supabase
+      .from("admin_members")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    setIsAdminAccount(!!am && !amErr);
   }, []);
 
   useEffect(() => {
@@ -175,6 +185,9 @@ const Navbar = ({
     []
   );
 
+  // Pick the correct logout route based on account type
+  const logoutHref = isAdminAccount ? "/admin/logout" : authProps.logout!.url;
+
   return (
     <section
       className={`py-4 sticky top-0 z-40 w-full bg-white transition-all ${
@@ -183,6 +196,7 @@ const Navbar = ({
       role="navigation"
       aria-label="Main"
     >
+      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 bg-primary text-primary-foreground rounded px-3 py-1">Skip to content</a>
       <div className="container max-w-screen-xl px-5 mx-auto">
         {/* Desktop */}
         <nav className="hidden justify-between lg:flex">
@@ -217,19 +231,21 @@ const Navbar = ({
               </>
             ) : (
               <>
-                {!isCommunityMember && (
+                {!isCommunityMember && !isAdminAccount && (
                   <Button asChild size="sm" variant="outline">
                     <Link to={authProps.community!.url}>{authProps.community!.text}</Link>
                   </Button>
                 )}
-                <Button asChild size="sm" variant="outline">
-                  <Link to={authProps.profile!.url} aria-label="Profile">
-                    <User2 className="mr-1" />
-                    {authProps.profile!.text}
-                  </Link>
-                </Button>
+                {!isAdminAccount && (
+                  <Button asChild size="sm" variant="outline">
+                    <Link to={authProps.profile!.url} aria-label="Profile">
+                      <User2 className="mr-1" />
+                      {authProps.profile!.text}
+                    </Link>
+                  </Button>
+                )}
                 <Button asChild size="sm">
-                  <Link to={authProps.logout!.url}>{authProps.logout!.text}</Link>
+                  <Link to={logoutHref}>{authProps.logout!.text}</Link>
                 </Button>
               </>
             )}
@@ -279,19 +295,21 @@ const Navbar = ({
                       </>
                     ) : (
                       <>
-                        {!isCommunityMember && (
+                        {!isCommunityMember && !isAdminAccount && (
                           <Button asChild size="sm" variant="outline">
                             <Link to={authProps.community!.url}>{authProps.community!.text}</Link>
                           </Button>
                         )}
-                        <Button asChild size="sm" variant="outline">
-                          <Link to={authProps.profile!.url} aria-label="Profile">
-                            <User2 className="mr-1" />
-                            {authProps.profile!.text}
-                          </Link>
-                        </Button>
+                        {!isAdminAccount && (
+                          <Button asChild size="sm" variant="outline">
+                            <Link to={authProps.profile!.url} aria-label="Profile">
+                              <User2 className="mr-1" />
+                              {authProps.profile!.text}
+                            </Link>
+                          </Button>
+                        )}
                         <Button asChild size="sm">
-                          <Link to={authProps.logout!.url}>{authProps.logout!.text}</Link>
+                          <Link to={logoutHref}>{authProps.logout!.text}</Link>
                         </Button>
                       </>
                     )}
