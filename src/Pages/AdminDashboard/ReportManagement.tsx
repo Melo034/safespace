@@ -1,3 +1,4 @@
+// src/components/admin/ReportManagement.tsx
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -17,15 +18,73 @@ import {
   Filter as FilterIcon,
   MapPin,
   Calendar,
-  UserIcon,
+  User as UserIcon,
   MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ReportType } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import AdminHeader from "@/components/admin/AdminHeader";
 
-// Local stat card for consistent modern styling
+/* ---------- DB-aligned types ---------- */
+type IncidentTypeDB = "harassment" | "discrimination" | "violence" | "other";
+type ReportPriorityDB = "Low" | "Medium" | "High" | "Critical";
+type ReportStatusDB = "Open" | "In Progress" | "Resolved";
+
+type DbReportRow = {
+  id: string;
+  title: string | null;
+  description: string | null;
+  type: IncidentTypeDB | null;
+  priority: ReportPriorityDB | null;
+  status: ReportStatusDB | null;
+  location: string | null;
+  reported_by: string | null;   // uuid or null
+  reported_at: string | null;   // timestamptz
+  assigned_to: string | null;   // uuid or null
+  tags: string[] | null;
+  follow_up_actions: string[] | null;
+  evidence: string[] | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type UiReport = {
+  id: string;
+  title: string;
+  description: string;
+  type: IncidentTypeDB;
+  priority: ReportPriorityDB;
+  status: ReportStatusDB;
+  location: string;
+  reported_by: string | null;     // keep uuid/null; render "anonymous" if null
+  reported_at: string;
+  assigned_to: string | null;     // uuid or null
+  tags: string[];
+  follow_up_actions: string[];
+  evidence: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+const toUi = (r: DbReportRow): UiReport => ({
+  id: r.id,
+  title: r.title ?? "",
+  description: r.description ?? "",
+  type: (r.type ?? "other") as IncidentTypeDB,
+  priority: (r.priority ?? "Low") as ReportPriorityDB,
+  status: (r.status ?? "Open") as ReportStatusDB,
+  location: r.location ?? "",
+  reported_by: r.reported_by,
+  reported_at: r.reported_at ?? "",
+  assigned_to: r.assigned_to,
+  tags: Array.isArray(r.tags) ? r.tags : [],
+  follow_up_actions: Array.isArray(r.follow_up_actions) ? r.follow_up_actions : [],
+  evidence: Array.isArray(r.evidence) ? r.evidence : [],
+  created_at: r.created_at ?? "",
+  updated_at: r.updated_at ?? "",
+});
+
+/* ---------- Local stat card ---------- */
 interface StatCardProps {
   title: string;
   value: number;
@@ -34,7 +93,6 @@ interface StatCardProps {
   bgColor: string;
   color: string;
 }
-
 const StatCard = ({ title, value, description, icon: Icon, bgColor, color }: StatCardProps) => (
   <Card className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
     <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-primary/10 blur-2xl transition group-hover:bg-primary/20" />
@@ -53,53 +111,58 @@ const StatCard = ({ title, value, description, icon: Icon, bgColor, color }: Sta
   </Card>
 );
 
-
-/** ---------- Page ---------- */
+/* ---------- Page ---------- */
 const ReportManagement = () => {
   const { loading: sessionLoading } = useAdminSession();
 
-  const [reports, setReports] = useState<ReportType[]>([]);
+  const [reports, setReports] = useState<UiReport[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [priorityFilter, setPriorityFilter] = useState("all");
-  const [selectedReport, setSelectedReport] = useState<ReportType | null>(null);
+  const [typeFilter, setTypeFilter] = useState<"all" | IncidentTypeDB>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | ReportStatusDB>("all");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | ReportPriorityDB>("all");
+  const [selectedReport, setSelectedReport] = useState<UiReport | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
 
-  // Route is guarded globally; no per-page gate
-
-  // load and subscribe
+  // load + realtime
   useEffect(() => {
     let alive = true;
 
     async function load() {
-      const { data, error } = await supabase.from("reports").select("*");
+      const { data, error } = await supabase
+        .from("reports")
+        .select(
+          [
+            "id",
+            "title",
+            "description",
+            "type",
+            "priority",
+            "status",
+            "location",
+            "reported_by",
+            "reported_at",
+            "assigned_to",
+            "tags",
+            "follow_up_actions",
+            "evidence",
+            "created_at",
+            "updated_at",
+          ].join(",")
+        )
+        .order("reported_at", { ascending: false });
+
       if (error) {
+        console.error(error);
         toast.error("Failed to fetch reports.");
         return;
       }
       if (!alive) return;
-
-      const rows: ReportType[] = (data ?? []).map((r: ReportType) => ({
-        id: r.id,
-        title: r.title || "",
-        description: r.description || "",
-        type: r.type || "other",
-        priority: r.priority || "Low",
-        status: r.status || "Open",
-        location: r.location || "",
-        reported_by: r.reported_by || "anonymous",
-        reported_at: r.reported_at || "",
-        assigned_to: r.assigned_to || null,
-        tags: Array.isArray(r.tags) ? r.tags : [],
-        follow_up_actions: Array.isArray(r.follow_up_actions) ? r.follow_up_actions : [],
-        evidence: Array.isArray(r.evidence) ? r.evidence : [],
-        created_at: r.created_at || "",
-        updated_at: r.updated_at || "",
-      }));
-
-      setReports(rows);
+      setReports(
+        Array.isArray(data) && data.every((item) => typeof item === "object" && item !== null && "id" in item)
+          ? (data as DbReportRow[]).map(toUi)
+          : []
+      );
     }
 
     if (!sessionLoading) load();
@@ -107,31 +170,40 @@ const ReportManagement = () => {
     const sub = supabase
       .channel("reports_changes_rm")
       .on("postgres_changes", { event: "*", schema: "public", table: "reports" }, (payload) => {
-        const r = payload.new as ReportType;
-        const row: ReportType = {
-          id: r?.id,
-          title: r?.title || "",
-          description: r?.description || "",
-          type: r?.type || "other",
-          priority: r?.priority || "Low",
-          status: r?.status || "Open",
-          location: r?.location || "",
-          reported_by: r?.reported_by || "anonymous",
-          reported_at: r?.reported_at || "",
-          assigned_to: r?.assigned_to || null,
-          tags: Array.isArray(r?.tags) ? r.tags : [],
-          follow_up_actions: Array.isArray(r?.follow_up_actions) ? r.follow_up_actions : [],
-          evidence: Array.isArray(r?.evidence) ? r.evidence : [],
-          created_at: r?.created_at || "",
-          updated_at: r?.updated_at || "",
-        };
+        if (!payload) return;
+
+        if (payload.eventType === "DELETE") {
+          const deletedId = (payload.old as { id?: string } | null)?.id;
+          if (!deletedId) return;
+          setReports((prev) => prev.filter((x) => x.id !== deletedId));
+          return;
+        }
+
+        const r = payload.new as Partial<DbReportRow> | null;
+        if (!r || !r.id) return;
+
+        const safeRow = toUi({
+          id: r.id,
+          title: (r.title ?? "") as string,
+          description: (r.description ?? "") as string,
+          type: (r.type ?? "other") as IncidentTypeDB,
+          priority: (r.priority ?? "Low") as ReportPriorityDB,
+          status: (r.status ?? "Open") as ReportStatusDB,
+          location: (r.location ?? "") as string,
+          reported_by: (r.reported_by ?? null) as string | null,
+          reported_at: (r.reported_at ?? "") as string,
+          assigned_to: (r.assigned_to ?? null) as string | null,
+          tags: (Array.isArray(r.tags) ? r.tags : []) as string[],
+          follow_up_actions: (Array.isArray(r.follow_up_actions) ? r.follow_up_actions : []) as string[],
+          evidence: (Array.isArray(r.evidence) ? r.evidence : []) as string[],
+          created_at: (r.created_at ?? "") as string,
+          updated_at: (r.updated_at ?? "") as string,
+        });
 
         if (payload.eventType === "INSERT") {
-          setReports((prev) => [row, ...prev]);
+          setReports((prev) => [safeRow, ...prev]);
         } else if (payload.eventType === "UPDATE") {
-          setReports((prev) => prev.map((x) => (x.id === row.id ? row : x)));
-        } else if (payload.eventType === "DELETE") {
-          setReports((prev) => prev.filter((x) => x.id !== (payload.old as ReportType)?.id));
+          setReports((prev) => prev.map((x) => (x.id === safeRow.id ? safeRow : x)));
         }
       })
       .subscribe();
@@ -154,7 +226,7 @@ const ReportManagement = () => {
     });
   }, [reports, searchTerm, typeFilter, statusFilter, priorityFilter]);
 
-  const getPriorityVariant = (priority: string): "destructive" | "default" | "secondary" => {
+  const getPriorityVariant = (priority: ReportPriorityDB): "destructive" | "default" | "secondary" => {
     switch (priority) {
       case "Critical":
       case "High":
@@ -167,7 +239,7 @@ const ReportManagement = () => {
     }
   };
 
-  const getStatusVariant = (status: ReportType["status"]): "destructive" | "default" | "secondary" => {
+  const getStatusVariant = (status: ReportStatusDB): "destructive" | "default" | "secondary" => {
     switch (status) {
       case "Open":
         return "destructive";
@@ -179,12 +251,12 @@ const ReportManagement = () => {
     }
   };
 
-  const handleEdit = (report: ReportType) => {
+  const handleEdit = (report: UiReport) => {
     setSelectedReport(report);
     setIsEditDialogOpen(true);
   };
 
-  const handleView = (report: ReportType) => {
+  const handleView = (report: UiReport) => {
     setSelectedReport(report);
     setIsViewDialogOpen(true);
   };
@@ -209,7 +281,7 @@ const ReportManagement = () => {
         .update({
           priority: selectedReport.priority,
           status: selectedReport.status,
-          assigned_to: selectedReport.assigned_to,
+          assigned_to: selectedReport.assigned_to || null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", selectedReport.id);
@@ -250,12 +322,12 @@ const ReportManagement = () => {
               const inprog = reports.filter((r) => r.status === "In Progress").length;
               const critical = reports.filter((r) => r.priority === "Critical").length;
               const resolved = reports.filter((r) => r.status === "Resolved").length;
-              const pluralize = (n: number, s: string, p: string) => (n <= 1 ? s : p);
+              const pluralize = (n: number, s: string, p: string) => (n === 1 ? s : p);
               const stats = [
-                { title: pluralize(open, "Open Case", "Open Cases"), value: open, description: open === 0 ? "No open cases" : open === 1 ? "1 open case" : `${open} open cases`, icon: AlertTriangle, bgColor: "bg-red-100", color: "text-red-600" },
-                { title: pluralize(inprog, "In-progress", "In-progress"), value: inprog, description: inprog === 0 ? "No reports under review" : inprog === 1 ? "1 report under review" : `${inprog} reports under review`, icon: MessageSquare, bgColor: "bg-blue-100", color: "text-blue-600" },
-                { title: pluralize(critical, "Critical", "Critical"), value: critical, description: critical === 0 ? "No high-priority incidents" : critical === 1 ? "1 high-priority incident" : `${critical} high-priority incidents`, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
-                { title: pluralize(resolved, "Resolved Case", "Resolved Cases"), value: resolved, description: resolved === 0 ? "No closed cases" : resolved === 1 ? "1 closed case" : `${resolved} closed cases`, icon: AlertTriangle, bgColor: "bg-green-100", color: "text-green-600" },
+                { title: pluralize(open, "Open Case", "Open Cases"), value: open, description: open === 0 ? "No open cases" : `${open} open cases`, icon: AlertTriangle, bgColor: "bg-red-100", color: "text-red-600" },
+                { title: "In-progress", value: inprog, description: inprog === 0 ? "No reports under review" : `${inprog} reports under review`, icon: MessageSquare, bgColor: "bg-blue-100", color: "text-blue-600" },
+                { title: "Critical", value: critical, description: critical === 0 ? "No high-priority incidents" : `${critical} high-priority incidents`, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
+                { title: pluralize(resolved, "Resolved Case", "Resolved Cases"), value: resolved, description: resolved === 0 ? "No closed cases" : `${resolved} closed cases`, icon: AlertTriangle, bgColor: "bg-green-100", color: "text-green-600" },
               ];
               return stats.map((s) => <StatCard key={s.title} {...s} />);
             })()}
@@ -277,7 +349,7 @@ const ReportManagement = () => {
                   </div>
                 </div>
 
-                <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as "all" | IncidentTypeDB)}>
                   <SelectTrigger className="w-[180px]">
                     <FilterIcon className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Type" />
@@ -291,7 +363,7 @@ const ReportManagement = () => {
                   </SelectContent>
                 </Select>
 
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as "all" | ReportStatusDB)}>
                   <SelectTrigger className="w-[180px]">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -303,7 +375,7 @@ const ReportManagement = () => {
                   </SelectContent>
                 </Select>
 
-                <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+                <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v as "all" | ReportPriorityDB)}>
                   <SelectTrigger className="w-[180px]">
                     <SelectValue placeholder="Priority" />
                   </SelectTrigger>
@@ -342,7 +414,7 @@ const ReportManagement = () => {
                         </div>
                         <div className="flex items-center gap-1">
                           <UserIcon className="h-4 w-4" />
-                          {r.reported_by}
+                          {r.reported_by ?? "anonymous"}
                         </div>
                       </div>
                     </div>
@@ -359,8 +431,10 @@ const ReportManagement = () => {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {r.tags?.map((tag) => (
-                      <Badge key={tag} variant="outline" className="rounded-full">{tag}</Badge>
+                    {r.tags.map((tag) => (
+                      <Badge key={`${r.id}-${tag}`} variant="outline" className="rounded-full">
+                        {tag}
+                      </Badge>
                     ))}
                   </div>
                 </CardContent>
@@ -368,6 +442,7 @@ const ReportManagement = () => {
             ))}
           </div>
 
+          {/* View dialog */}
           <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
             <DialogContent className="max-w-2xl rounded-xl">
               <DialogHeader>
@@ -398,7 +473,7 @@ const ReportManagement = () => {
                     </div>
                     <div>
                       <label className="text-sm font-medium">Reported By</label>
-                      <p className="text-sm text-muted-foreground">{selectedReport.reported_by}</p>
+                      <p className="text-sm text-muted-foreground">{selectedReport.reported_by ?? "anonymous"}</p>
                     </div>
                     <div>
                       <label className="text-sm font-medium">Reported At</label>
@@ -406,7 +481,7 @@ const ReportManagement = () => {
                     </div>
                     <div>
                       <label className="text-sm font-medium">Assigned To</label>
-                      <p className="text-sm text-muted-foreground">{selectedReport.assigned_to || "Unassigned"}</p>
+                      <p className="text-sm text-muted-foreground">{selectedReport.assigned_to ?? "Unassigned"}</p>
                     </div>
                   </div>
 
@@ -419,7 +494,9 @@ const ReportManagement = () => {
                     <label className="text-sm font-medium mb-2 block">Follow-up Actions</label>
                     <ul className="list-disc list-inside space-y-1">
                       {selectedReport.follow_up_actions.map((a, i) => (
-                        <li key={i} className="text-sm text-muted-foreground">{a}</li>
+                        <li key={`${selectedReport.id}-fup-${i}`} className="text-sm text-muted-foreground">
+                          {a}
+                        </li>
                       ))}
                     </ul>
                   </div>
@@ -428,7 +505,7 @@ const ReportManagement = () => {
                     <label className="text-sm font-medium mb-2 block">Evidence</label>
                     <div className="flex flex-wrap gap-2">
                       {selectedReport.evidence.map((url, i) => (
-                        <a key={i} href={url} target="_blank" rel="noopener noreferrer">
+                        <a key={`${selectedReport.id}-ev-${i}`} href={url} target="_blank" rel="noopener noreferrer">
                           <Badge variant="outline">Evidence {i + 1}</Badge>
                         </a>
                       ))}
@@ -439,6 +516,7 @@ const ReportManagement = () => {
             </DialogContent>
           </Dialog>
 
+          {/* Edit dialog */}
           <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
             <DialogContent className="max-w-2xl rounded-xl">
               <DialogHeader>
@@ -458,7 +536,7 @@ const ReportManagement = () => {
                       <Select
                         value={selectedReport.priority}
                         onValueChange={(v) =>
-                          setSelectedReport({ ...selectedReport, priority: v as ReportType["priority"] })
+                          setSelectedReport({ ...selectedReport, priority: v as ReportPriorityDB })
                         }
                       >
                         <SelectTrigger>
@@ -478,7 +556,7 @@ const ReportManagement = () => {
                       <Select
                         value={selectedReport.status}
                         onValueChange={(v) =>
-                          setSelectedReport({ ...selectedReport, status: v as ReportType["status"] })
+                          setSelectedReport({ ...selectedReport, status: v as ReportStatusDB })
                         }
                       >
                         <SelectTrigger>
@@ -494,10 +572,16 @@ const ReportManagement = () => {
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium mb-2 block">Assigned To</label>
+                    <label className="text-sm font-medium mb-2 block">Assigned To (uuid)</label>
                     <Input
-                      value={selectedReport.assigned_to || ""}
-                      onChange={(e) => setSelectedReport({ ...selectedReport, assigned_to: e.target.value })}
+                      value={selectedReport.assigned_to ?? ""}
+                      onChange={(e) =>
+                        setSelectedReport({
+                          ...selectedReport,
+                          assigned_to: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                        })
+                      }
+                      placeholder="leave empty for unassigned"
                     />
                   </div>
 

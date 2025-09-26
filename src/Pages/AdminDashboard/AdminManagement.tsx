@@ -1,4 +1,3 @@
-// AdminManagement.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
@@ -24,7 +23,7 @@ import type {
 } from "@/lib/types";
 import AdminHeader from "@/components/admin/AdminHeader";
 
-/** ===== Validation (UI only) ===== */
+/** Validation */
 const adminSchema = z.object({
   user_id: z.string().uuid({ message: "Provide a valid user_id" }).optional(),
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -37,6 +36,14 @@ const adminSchema = z.object({
     .refine((v) => ["active", "inactive", "suspended"].includes(String(v))),
 });
 
+const inviteSchema = z.object({
+  email: z.string().email("Invalid email"),
+  role: z
+    .custom<RoleType>()
+    .refine((v) => ["admin", "super_admin", "moderator"].includes(String(v))),
+  name: z.string().min(2, "Name must be at least 2 characters").optional(),
+});
+
 const AdminManagement = () => {
   const { userRole, loading: authLoading } = useAuth();
   const { profile: currentAdmin, refresh: refreshAdminSession } = useAdminSession();
@@ -46,32 +53,36 @@ const AdminManagement = () => {
   const [filterStatus, setFilterStatus] = useState<AdminStatus | "all">("all");
   const [filterRole, setFilterRole] = useState<RoleType | "all">("all");
 
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
 
   const [selectedAdmin, setSelectedAdmin] = useState<Admin | null>(null);
 
-  const [formData, setFormData] = useState<
-    AdminFormData & { avatarFile?: File | null }
-  >({
-    user_id: "",
-    name: "",
+  const [formData, setFormData] = useState<AdminFormData & { avatarFile?: File | null }>({
     email: "",
     role: "admin",
+    name: "",
     status: "active",
-    password: "",
     avatarFile: null,
   });
-  const [formErrors, setFormErrors] = useState<
-    Partial<Record<keyof AdminFormData, string>>
-  >({});
+  const [formErrors, setFormErrors] = useState<Partial<Record<keyof AdminFormData, string>>>(
+    {}
+  );
 
   const [loading, setLoading] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [isAdding, setIsAdding] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  // Debounce searchTerm
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [searchTerm]);
 
   const [pageState, setPageState] = useState<PageState>({
     page: 1,
@@ -79,39 +90,34 @@ const AdminManagement = () => {
     total: 0,
   });
 
-  const from = useMemo(
-    () => (pageState.page - 1) * pageState.pageSize,
-    [pageState]
-  );
+  const from = useMemo(() => (pageState.page - 1) * pageState.pageSize, [pageState]);
   const to = useMemo(() => from + pageState.pageSize - 1, [from, pageState.pageSize]);
 
-  /** ===== Helpers ===== */
-  const hasPerm = (action: "add" | "edit" | "delete", targetRole: RoleType) => {
+  /** Helpers */
+  const hasPerm = (action: "invite" | "edit" | "delete", targetRole: RoleType) => {
     if (!userRole) return false;
     if (userRole === "super_admin") return true;
-    if (userRole === "admin") return targetRole !== "super_admin";
-    if (userRole === "moderator") return action === "edit" && targetRole === "moderator";
+    if (userRole === "admin" && action !== "invite") return targetRole !== "super_admin";
+    if (userRole === "moderator" && action === "edit") return targetRole === "moderator";
     return false;
   };
 
-  const isDbErrorWithCode = (err: unknown): err is { code: string } => {
-    return (
-      typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      typeof (err as Record<string, unknown>).code === "string"
-    );
-  };
+  const isDbErrorWithCode = (err: unknown): err is { code: string } =>
+    typeof err === "object" && err !== null && "code" in err && typeof (err as { code?: unknown }).code === "string";
 
-  const validateForm = (data: Partial<AdminFormData>) => {
+  const validateForm = (data: Partial<AdminFormData>, isInvite = false) => {
     try {
-      adminSchema.parse({
-        user_id: data.user_id || undefined,
-        name: data.name,
-        email: data.email,
-        role: data.role,
-        status: data.status,
-      });
+      if (isInvite) {
+        inviteSchema.parse({ email: data.email, role: data.role });
+      } else {
+        adminSchema.parse({
+          user_id: data.user_id || undefined,
+          name: data.name,
+          email: data.email,
+          role: data.role,
+          status: data.status,
+        });
+      }
       setFormErrors({});
       return true;
     } catch (e) {
@@ -127,12 +133,7 @@ const AdminManagement = () => {
     }
   };
 
-  /** ===== Data load via RPC ===== */
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 300);
-    return () => clearTimeout(t);
-  }, [searchTerm]);
-
+  /** Data load via RPC */
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -150,7 +151,6 @@ const AdminManagement = () => {
           p_to: to,
         });
         if (error) throw error;
-
         if (!alive) return;
 
         const rows = (data ?? []) as Array<{
@@ -193,139 +193,65 @@ const AdminManagement = () => {
     };
   }, [from, to, filterStatus, filterRole, debouncedSearch]);
 
-  /** ===== CRUD via RPCs ===== */
+  /** CRUD */
 
-  // Create
-  const handleAddAdmin = async () => {
-    const payload = {
-      user_id: formData.user_id?.trim() || undefined,
-      name: formData.name.trim(),
-      email: formData.email.trim().toLowerCase(),
-      role: formData.role as RoleType,
-      status: formData.status as AdminStatus,
-    };
+  const handlePreauthorizeAdmin = async () => {
+    const email = (formData.email || "").trim().toLowerCase();
+    const role = formData.role as RoleType;
 
-    if (!validateForm(payload)) return;
-    if (!hasPerm("add", payload.role)) {
+    const payload = { email, role };
+    if (!validateForm(payload, true)) return;
+    if (!hasPerm("invite", role)) {
       toast.error("No permission.");
       return;
     }
 
-    const rawPassword = formData.password?.trim() ?? "";
-    if (rawPassword.length < 8) {
-      setFormErrors((prev) => ({
-        ...prev,
-        password: "Password must be at least 8 characters",
-      }));
-      return;
-    }
-
-    const username = payload.email ? payload.email.split("@")[0].toLowerCase() : null;
-
-    setIsAdding(true);
-    let avatarUrl: string | null = null;
-
     try {
-      if (formData.avatarFile) {
-        const bucket = "avatars";
-        const ext = formData.avatarFile.name.split(".").pop() || "jpg";
-        const base = (username || "admin").replace(/[^a-zA-Z0-9_-]/g, "");
-        const path = `admins/${base}-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from(bucket)
-          .upload(path, formData.avatarFile, {
-            cacheControl: "3600",
-            upsert: false,
-          });
-        if (upErr) {
-          console.error(upErr);
-          toast.error("Failed to upload avatar. Proceeding without it.");
-        } else {
-          const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
-          avatarUrl = pub.publicUrl;
-        }
-      }
+      setIsInviting(true);
 
-      const { data, error } = await supabase.rpc("admin_create", {
-        p_name: formData.name.trim(),
-        p_email: formData.email.trim().toLowerCase(),
-        p_role: formData.role,
-        p_status: formData.status,
-        p_user_id: formData.user_id?.trim() || null,
-        p_username: formData.email.split("@")[0].toLowerCase(),
-        p_avatar_url: avatarUrl,           // null when absent
-        p_password: rawPassword,
-      });
+      // Upsert placeholder row; user signs up later
+      const { error } = await supabase.from("admin_members").upsert(
+        {
+          email,                              // raw email stored in lowercase
+          role,
+          status: "inactive",
+          name,
+          username: email.split("@")[0],
+        },
+        { onConflict: "email_ci" }            // <- matches the generated column + unique index
+      );
 
-      if (error) {
-        if (isDbErrorWithCode(error) && error.code === "23505") {
-          toast.error("Email or user ID already exists.");
-          return;
-        }
-        throw error;
-      }
+      if (error) throw error;
 
-      const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
-      if (!row) {
-        toast.error("Create failed.");
-        return;
-      }
-
-      const mapped: Admin = {
-        id: row.id,
-        user_id: row.user_id ?? null,
-        name: row.name ?? payload.name,
-        email: row.email ?? payload.email,
-        role: (row.role ?? payload.role) as RoleType,
-        status: (row.status as AdminStatus) ?? payload.status,
-        created_at: row.created_at ?? new Date().toISOString(),
-        avatar: row.avatar_url ?? undefined,
-      };
-
-      setAdmins((prev) => [mapped, ...prev]);
-      setPageState((s) => ({ ...s, total: s.total + 1 }));
-
-      setIsAddDialogOpen(false);
+      setIsInviteDialogOpen(false);
       resetForm();
-      toast.success("Admin added.");
-    } catch (e) {
-      console.error(e);
-      const err = e as { message?: string };
-      toast.error(err?.message || "Create failed.");
+      toast.success("Pre-authorization saved. Ask the user to sign up with that email.");
+    } catch (e: unknown) {
+      console.error("preauth upsert", e);
+      if (typeof e === "object" && e !== null && "message" in e && typeof (e as { message?: unknown }).message === "string") {
+        toast.error((e as { message: string }).message);
+      } else {
+        toast.error("Failed to pre-authorize.");
+      }
     } finally {
-      setIsAdding(false);
+      setIsInviting(false);
     }
   };
 
-  // Update profile and optional password
+  // Update profile. Email changes are skipped because they belong in Auth.
   const handleEditAdmin = async () => {
     if (!selectedAdmin) return;
 
     const payload = {
-      name: formData.name.trim(),
-      email: formData.email.trim().toLowerCase(),
+      name: formData.name?.trim() ?? selectedAdmin.name,
+      email: (formData.email || selectedAdmin.email).trim().toLowerCase(),
       role: formData.role as RoleType,
       status: formData.status as AdminStatus,
     };
 
     if (!validateForm({ ...payload, user_id: selectedAdmin.user_id ?? undefined })) return;
-    if (!hasPerm("edit", selectedAdmin.role as RoleType)) {
+    if (!hasPerm("edit", selectedAdmin.role)) {
       toast.error("No permission.");
-      return;
-    }
-
-    setFormErrors((prev) => {
-      const next = { ...prev };
-      if ("password" in next) delete next.password;
-      return next;
-    });
-
-    const trimmedPassword = formData.password?.trim() ?? "";
-    if (trimmedPassword.length > 0 && trimmedPassword.length < 8) {
-      setFormErrors((prev) => ({
-        ...prev,
-        password: "Password must be at least 8 characters",
-      }));
       return;
     }
 
@@ -337,18 +263,15 @@ const AdminManagement = () => {
       if (formData.avatarFile) {
         const bucket = "avatars";
         const ext = formData.avatarFile.name.split(".").pop() || "jpg";
-        const base = (
-          selectedAdmin.user_id ||
-          payload.email.split("@")[0] ||
-          "admin"
-        ).replace(/[^a-zA-Z0-9_-]/g, "");
+        const base = (selectedAdmin.user_id || payload.email.split("@")[0] || "admin").replace(
+          /[^a-zA-Z0-9_-]/g,
+          ""
+        );
         const path = `admins/${base}-${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage
-          .from(bucket)
-          .upload(path, formData.avatarFile, {
-            cacheControl: "3600",
-            upsert: false,
-          });
+        const { error: upErr } = await supabase.storage.from(bucket).upload(path, formData.avatarFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
         if (upErr) {
           console.error(upErr);
           toast.error("Failed to upload new avatar.");
@@ -358,46 +281,38 @@ const AdminManagement = () => {
         }
       }
 
-      // Profile update via RPC
-      // Profile update via RPC
-      const { data, error } = await supabase.rpc("admin_update", {
-        p_id: selectedAdmin.id,
-        p_name: payload.name,
-        p_email: payload.email,
-        p_role: payload.role,
-        p_status: payload.status,
-        p_username: (
-          selectedAdmin.user_id || payload.email.split("@")[0]
-        ).toLowerCase(),
-        p_avatar_url: avatarUrl ?? null,
-      });
+      const updateBody: Record<string, unknown> = {
+        name: payload.name,
+        role: payload.role,
+        status: payload.status,
+        username: (selectedAdmin.user_id || payload.email.split("@")[0]).toLowerCase(),
+      };
+      if (avatarUrl) updateBody["avatar_url"] = avatarUrl;
 
-      if (error) {
-        if (isDbErrorWithCode(error) && error.code === "23505") {
-          toast.error("Another admin already uses this email.");
+      const { data: updRows, error: updErr } = await supabase
+        .from("admin_members")
+        .update(updateBody)
+        .eq("id", selectedAdmin.id)
+        .select("*")
+        .limit(1);
+
+      if (updErr) {
+        if (isDbErrorWithCode(updErr) && updErr.code === "23505") {
+          toast.error("Conflict updating admin.");
           setIsEditing(false);
           return;
         }
-        throw error;
+        throw updErr;
       }
 
-      // Optional password reset
-      if (trimmedPassword) {
-        const { error: pwdErr } = await supabase.rpc("admin_set_password", {
-          p_admin_id: selectedAdmin.id,
-          p_password: trimmedPassword,
-        });
-        if (pwdErr) throw pwdErr;
-      }
+      const row = updRows?.[0];
 
-      const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
       setAdmins((prev) =>
         prev.map((a) =>
           a.id === selectedAdmin.id
             ? {
               ...a,
               name: row?.name ?? payload.name,
-              email: row?.email ?? payload.email,
               role: (row?.role ?? payload.role) as RoleType,
               status: (row?.status as AdminStatus) ?? payload.status,
               avatar: avatarUrl ?? a.avatar,
@@ -413,13 +328,10 @@ const AdminManagement = () => {
 
       setIsEditDialogOpen(false);
       resetForm();
-      toast.success(
-        trimmedPassword ? "Admin updated and password reset." : "Admin updated."
-      );
+      toast.success("Admin updated.");
     } catch (err) {
       console.error(err);
-      const e = err as { message?: string };
-      toast.error(e?.message || "Update failed.");
+      toast.error("Update failed.");
     } finally {
       setIsEditing(false);
     }
@@ -429,14 +341,16 @@ const AdminManagement = () => {
   const handleDeleteAdmin = async (adminId: string) => {
     const row = admins.find((a) => a.id === adminId);
     if (!row) return;
-    if (!hasPerm("delete", row.role as RoleType)) {
+    if (!hasPerm("delete", row.role)) {
       toast.error("No permission.");
       return;
     }
 
     try {
       setIsDeleting(adminId);
-      const { error } = await supabase.rpc("admin_delete", { p_id: adminId });
+
+      const { error } = await supabase.from("admin_members").delete().eq("id", adminId);
+
       if (error) throw error;
 
       setAdmins((prev) => prev.filter((a) => a.id !== adminId));
@@ -444,22 +358,19 @@ const AdminManagement = () => {
       toast.success("Admin removed.");
     } catch (err) {
       console.error(err);
-      const e = err as { message?: string };
-      toast.error(e?.message || "Delete failed.");
+      toast.error("Delete failed.");
     } finally {
       setIsDeleting(null);
     }
   };
 
-  /** ===== UI helpers ===== */
+  /** UI helpers */
   const resetForm = () => {
     setFormData({
-      user_id: "",
-      name: "",
       email: "",
       role: "admin",
+      name: "",
       status: "active",
-      password: "",
       avatarFile: null,
     });
     setSelectedAdmin(null);
@@ -474,12 +385,10 @@ const AdminManagement = () => {
   const handleEditClick = (admin: Admin) => {
     setSelectedAdmin(admin);
     setFormData({
-      user_id: admin.user_id ?? "",
       name: admin.name,
       email: admin.email,
       role: admin.role,
       status: admin.status,
-      password: "",
     });
     setIsEditDialogOpen(true);
   };
@@ -489,7 +398,7 @@ const AdminManagement = () => {
     [pageState.total, pageState.pageSize]
   );
 
-  /** ===== Render ===== */
+  /** Render */
   return (
     <SidebarProvider>
       <AppSidebar />
@@ -507,17 +416,15 @@ const AdminManagement = () => {
               <h1 className="text-3xl font-semibold tracking-tight text-foreground">
                 Admin Management
               </h1>
-              <p className="text-sm text-muted-foreground">
-                Manage administrators and their roles
-              </p>
+              <p className="text-sm text-muted-foreground">Manage administrators and their roles</p>
             </div>
             <Button
               className="rounded-full"
-              onClick={() => setIsAddDialogOpen(true)}
-              disabled={!hasPerm("add", "admin")}
+              onClick={() => setIsInviteDialogOpen(true)}
+              disabled={!hasPerm("invite", "admin")}
             >
               <Plus className="h-4 w-4 mr-2" />
-              Add Admin
+              Pre-authorize Admin
             </Button>
           </div>
 
@@ -527,31 +434,12 @@ const AdminManagement = () => {
               const total = pageState.total;
               const active = admins.filter((a) => a.status === "active").length;
               const inactive = admins.filter((a) => a.status === "inactive").length;
-              const suspended =
-                admins.filter((a) => a.status === "suspended").length;
+              const suspended = admins.filter((a) => a.status === "suspended").length;
               const stats = [
-                {
-                  title: "Total Admins",
-                  value: total,
-                  description: total === 1 ? "1 admin" : `${total} admins`,
-                },
-                {
-                  title: "Active",
-                  value: active,
-                  description: active === 1 ? "1 active" : `${active} active`,
-                },
-                {
-                  title: "Inactive",
-                  value: inactive,
-                  description:
-                    inactive === 1 ? "1 inactive" : `${inactive} inactive`,
-                },
-                {
-                  title: "Suspended",
-                  value: suspended,
-                  description:
-                    suspended === 1 ? "1 suspended" : `${suspended} suspended`,
-                },
+                { title: "Total Admins", value: total, description: total === 1 ? "1 admin" : `${total} admins` },
+                { title: "Active", value: active, description: active === 1 ? "1 active" : `${active} active` },
+                { title: "Inactive", value: inactive, description: inactive === 1 ? "1 inactive" : `${inactive} inactive` },
+                { title: "Suspended", value: suspended, description: suspended === 1 ? "1 suspended" : `${suspended} suspended` },
               ];
               return stats.map((s) => (
                 <div
@@ -561,12 +449,8 @@ const AdminManagement = () => {
                   <div className="text-xs font-medium text-muted-foreground tracking-wider uppercase">
                     {s.title}
                   </div>
-                  <div className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
-                    {s.value}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {s.description}
-                  </div>
+                  <div className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{s.value}</div>
+                  <div className="text-xs text-muted-foreground">{s.description}</div>
                 </div>
               ));
             })()}
@@ -606,7 +490,7 @@ const AdminManagement = () => {
                     handleViewAdmin={handleViewAdmin}
                     handleEditClick={handleEditClick}
                     handleDeleteAdmin={handleDeleteAdmin}
-                    canPerformAction={(action: "add" | "edit" | "delete", role: string) =>
+                    canPerformAction={(action: "invite" | "edit" | "delete", role: string) =>
                       hasPerm(action, role as RoleType)
                     }
                   />
@@ -624,18 +508,14 @@ const AdminManagement = () => {
                     <div className="flex gap-2">
                       <Button
                         disabled={pageState.page === 1}
-                        onClick={() =>
-                          setPageState((s) => ({ ...s, page: s.page - 1 }))
-                        }
+                        onClick={() => setPageState((s) => ({ ...s, page: s.page - 1 }))}
                         aria-label="Previous page"
                       >
                         Previous
                       </Button>
                       <Button
                         disabled={pageState.page === pageCount}
-                        onClick={() =>
-                          setPageState((s) => ({ ...s, page: s.page + 1 }))
-                        }
+                        onClick={() => setPageState((s) => ({ ...s, page: s.page + 1 }))}
                         aria-label="Next page"
                       >
                         Next
@@ -648,8 +528,8 @@ const AdminManagement = () => {
           </Card>
 
           <AdminDialogs
-            isAddDialogOpen={isAddDialogOpen}
-            setIsAddDialogOpen={setIsAddDialogOpen}
+            isAddDialogOpen={isInviteDialogOpen}
+            setIsAddDialogOpen={setIsInviteDialogOpen}
             isEditDialogOpen={isEditDialogOpen}
             setIsEditDialogOpen={setIsEditDialogOpen}
             isViewDialogOpen={isViewDialogOpen}
@@ -658,10 +538,10 @@ const AdminManagement = () => {
             setFormData={setFormData}
             formErrors={formErrors}
             selectedAdmin={selectedAdmin}
-            isAdding={isAdding}
+            isAdding={isInviting}
             isEditing={isEditing}
             userRole={userRole}
-            handleAddAdmin={handleAddAdmin}
+            handleAddAdmin={handlePreauthorizeAdmin}
             handleEditAdmin={handleEditAdmin}
             resetForm={resetForm}
           />

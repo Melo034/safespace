@@ -1,3 +1,4 @@
+// Profile.tsx — aligned with your Supabase schema & policies
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import supabase from "@/server/supabase";
@@ -9,16 +10,21 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import Sidebar from "../Components/Sidebar";
-import  Navbar  from "@/components/utils/Navbar";
+import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import Loading from "@/components/utils/Loading";
 import StoryCard from "../Components/story-card";
 import type { Story } from "@/lib/types";
 
+/** ─────────────────────────────────────────────────────────────────────────────
+ *  DB-aligned types (community_members, stories)
+ *  - community_members.email is NOT NULL in DB → keep as string (no null)
+ *  - Only select / write columns that exist in your schema
+ *  ────────────────────────────────────────────────────────────────────────────*/
 type CommunityMember = {
   user_id: string;
   name: string;
-  email: string | null;
+  email: string; // NOT NULL in DB
   avatar_url: string | null;
   bio: string | null;
   stories_count: number;
@@ -27,38 +33,33 @@ type CommunityMember = {
 
 type CommunityMemberRow = {
   user_id: string;
-  name?: string | null;
-  email?: string | null;
-  avatar_url?: string | null;
-  bio?: string | null;
-  stories_count?: number | null;
-  join_date?: string | Date | null;
+  name: string | null;
+  email: string; // NOT NULL in DB, but we safeguard in mapping
+  avatar_url: string | null;
+  bio: string | null;
+  stories_count: number | null;
+  join_date: string | null;
 };
 
 function mapRowToMember(row: CommunityMemberRow): CommunityMember {
   return {
     user_id: row.user_id,
-    name: row.name ?? "Anonymous User",
-    email: row.email ?? "",
+    name: row.name ?? "Anonymous",
+    email: row.email ?? "", // DB is NOT NULL; empty string is still valid text
     avatar_url: row.avatar_url ?? null,
     bio: row.bio ?? null,
     stories_count: row.stories_count ?? 0,
-    join_date:
-      typeof row.join_date === "string"
-        ? row.join_date
-        : row.join_date instanceof Date
-        ? row.join_date.toISOString()
-        : new Date().toISOString(),
+    join_date: row.join_date ?? new Date().toISOString(),
   };
-};
+}
 
 interface StoryRow {
-  id: string | number;
-  title?: string | null;
-  content?: string | null;
-  author_id?: string | null;
-  created_at?: string | null;
-  tags?: unknown;
+  id: string;
+  title: string | null;
+  content: string | null;
+  author_id: string | null;
+  created_at: string | null;
+  tags: string[] | null;
 }
 
 function mapRowToStory(row: StoryRow): Story {
@@ -80,7 +81,7 @@ function mapRowToStory(row: StoryRow): Story {
     likes: 0,
     comments_count: 0,
     views: 0,
-    tags: Array.isArray(row.tags as string[]) ? (row.tags as string[]) : [],
+    tags: Array.isArray(row.tags) ? row.tags : [],
     featured: false,
   } as Story;
 }
@@ -108,30 +109,32 @@ const Profile = () => {
           return;
         }
 
-        // 1) Get or create community member profile
+        // 1) Get or create community member profile (RLS: *_self policies)
         const { data: profileRow, error: profileErr } = await supabase
           .from("community_members")
-          .select("*")
+          .select("user_id,name,email,avatar_url,bio,stories_count,join_date")
           .eq("user_id", user.id)
-          .maybeSingle();
+          .maybeSingle<CommunityMemberRow>();
         if (profileErr) throw profileErr;
 
         let currentMember: CommunityMember;
+
         if (!profileRow) {
-          const newRow = {
+          const insertPayload = {
             user_id: user.id,
-            name: user.user_metadata?.name || "Anonymous User",
-            email: user.email ?? null,
-            avatar_url: user.user_metadata?.avatar_url ?? null,
+            name: (user.user_metadata?.name as string | undefined) || "Anonymous",
+            email: user.email ?? "", // DB requires NOT NULL
+            avatar_url: (user.user_metadata?.avatar_url as string | undefined) ?? null,
             bio: null,
             stories_count: 0,
-            join_date: new Date().toISOString(),
           };
+
           const { data: inserted, error: insertErr } = await supabase
             .from("community_members")
-            .insert(newRow)
-            .select()
-            .single();
+            .insert(insertPayload)
+            .select("user_id,name,email,avatar_url,bio,stories_count,join_date")
+            .single<CommunityMemberRow>();
+
           if (insertErr) throw insertErr;
           currentMember = mapRowToMember(inserted);
         } else {
@@ -139,23 +142,24 @@ const Profile = () => {
         }
         setMember(currentMember);
 
-        // 2) Fetch member's stories
+        // 2) Fetch member's stories (only existing schema columns)
         const { data: storiesRows, error: storiesErr } = await supabase
-          .from("stories").select("id,title,content,author_id,created_at,tags")
+          .from("stories")
+          .select("id,title,content,author_id,created_at,tags")
           .eq("author_id", user.id)
           .order("created_at", { ascending: false });
         if (storiesErr) throw storiesErr;
 
-        const userStories = (storiesRows ?? []).map(mapRowToStory);
+        const userStories = (storiesRows ?? []).map((r) => mapRowToStory(r as StoryRow));
         setStories(userStories);
 
-        // 3) Update stories_count if changed
+        // 3) Update stories_count if changed (RLS: update_self_or_admin)
         if ((currentMember.stories_count ?? 0) !== userStories.length) {
           await supabase
             .from("community_members")
-            .update({ stories_count: userStories.length })
+            .update({ stories_count: userStories.length, updated_at: new Date().toISOString() })
             .eq("user_id", user.id);
-          setMember((prev) => (prev ? { ...prev, stories_count: userStories.length } as CommunityMember : prev));
+          setMember((prev) => (prev ? { ...prev, stories_count: userStories.length } : prev));
         }
       } catch (err) {
         console.error("Error loading profile:", err);
@@ -166,12 +170,12 @@ const Profile = () => {
       }
     };
 
-    init();
+    void init();
   }, [navigate]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setMember((prev) => (prev ? { ...prev, [name]: value } as CommunityMember : prev));
+    setMember((prev) => (prev ? ({ ...prev, [name]: value } as CommunityMember) : prev));
   };
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -199,23 +203,28 @@ const Profile = () => {
           throw new Error("Avatar must be less than 5MB.");
         }
 
-        const path = `avatars/${user.id}/${Date.now()}_${avatarFile.name}`;
-        const { error: uploadErr } = await supabase.storage.from("avatars").upload(path, avatarFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
+        const path = `${user.id}/${Date.now()}_${avatarFile.name}`;
+        const { error: uploadErr } = await supabase.storage
+          .from("avatars")
+          .upload(path, avatarFile, { cacheControl: "3600", upsert: false });
         if (uploadErr) throw uploadErr;
 
         const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(path);
         avatarUrl = urlData.publicUrl;
       }
 
+      // DB: email is NOT NULL → ensure string
       const payload = {
-        name: (member.name || "").trim(),
-        email: (member.email || "anonymous@example.com").trim(),
+        name: (member.name || "Anonymous").trim(),
+        email: (member.email || "").trim(),
         avatar_url: avatarUrl,
         bio: (member.bio || "")?.trim() || null,
+        updated_at: new Date().toISOString(),
       };
+
+      if (!payload.email) {
+        throw new Error("Email is required.");
+      }
 
       const { error: updateErr } = await supabase
         .from("community_members")
@@ -224,7 +233,7 @@ const Profile = () => {
 
       if (updateErr) throw updateErr;
 
-      setMember((prev) => (prev ? { ...prev, ...payload } as CommunityMember : prev));
+      setMember((prev) => (prev ? ({ ...prev, ...payload } as CommunityMember) : prev));
       setAvatarFile(null);
       setIsEditing(false);
       toast.success("Profile updated successfully.");
@@ -335,7 +344,7 @@ const Profile = () => {
                       id="email"
                       name="email"
                       type="email"
-                      value={member.email ?? ""}
+                      value={member.email}
                       onChange={handleChange}
                       required
                       aria-required="true"

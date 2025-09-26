@@ -1,4 +1,4 @@
-// ResourcesManagement.tsx
+// src/components/admin/ResourcesManagement.tsx
 import { useEffect, useState } from "react";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -13,23 +13,73 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { FileText, Image as ImageIcon, Globe, Edit, Trash, CheckCircle, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import type { Resource } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import AdminHeader from "@/components/admin/AdminHeader";
 
-/** ---------- Types / constants ---------- */
-const VALID_CATEGORIES = ["safety-planning", "legal-aid", "counseling", "emergency", "education"] as const;
+/* ---------- DB-aligned types & constants ---------- */
+const VALID_CATEGORIES = [
+  "safety-planning",
+  "legal-aid",
+  "counseling",
+  "emergency",
+  "education",
+] as const;
 type CategoryType = (typeof VALID_CATEGORIES)[number];
 
+type ResourceTypeDB = "pdf" | "website";
 
-/** ---------- Page ---------- */
+type DbResourceRow = {
+  id: string;
+  title: string | null;
+  category: string | null;
+  description: string | null;
+  type: ResourceTypeDB | null;
+  url: string | null;
+  image: string | null;         // keep column name `image` to match DB
+  tags: string[] | null;
+  downloads: number | null;
+  views: number | null;
+  is_verified: boolean | null;
+};
+
+type UiResource = {
+  id: string;
+  title: string;
+  category: CategoryType | ""; // keep empty string if unknown
+  description: string;
+  type: ResourceTypeDB;
+  url: string;
+  image: string;
+  tags: string[];
+  downloads: number;
+  views: number;
+  is_verified: boolean;
+};
+
+const toUi = (r: DbResourceRow): UiResource => ({
+  id: r.id,
+  title: r.title ?? "",
+  category: ((r.category ?? "") as CategoryType | ""),
+  description: r.description ?? "",
+  type: (r.type ?? "website") as ResourceTypeDB,
+  url: r.url ?? "",
+  image: r.image ?? "",
+  tags: Array.isArray(r.tags) ? r.tags : [],
+  downloads: Number(r.downloads ?? 0),
+  views: Number(r.views ?? 0),
+  is_verified: !!r.is_verified,
+});
+
+const RESOURCES_BUCKET = "resources"; // single bucket; we store under pdfs/ and images/
+
+/* ---------- Component ---------- */
 const ResourcesManagement = () => {
   const { loading: sessionLoading } = useAdminSession();
 
-  const [resources, setResources] = useState<Resource[]>([]);
+  const [resources, setResources] = useState<UiResource[]>([]);
   const [isEditing, setIsEditing] = useState(false);
-  const [currentResource, setCurrentResource] = useState<Resource | null>(null);
-  const [formData, setFormData] = useState<Partial<Resource>>({
+  const [currentResource, setCurrentResource] = useState<UiResource | null>(null);
+  const [formData, setFormData] = useState<Partial<UiResource>>({
     title: "",
     category: "",
     description: "",
@@ -47,62 +97,76 @@ const ResourcesManagement = () => {
   const [docProgress, setDocProgress] = useState<number>(0);
   const [imgProgress, setImgProgress] = useState<number>(0);
 
-  // Route is guarded globally; no per-page gate needed
-
-  /** load + realtime */
   useEffect(() => {
     let alive = true;
 
-    async function load() {
-      const { data, error } = await supabase.from("resources").select("*");
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("resources")
+        .select(
+          [
+            "id",
+            "title",
+            "category",
+            "description",
+            "type",
+            "url",
+            "image",
+            "tags",
+            "downloads",
+            "views",
+            "is_verified",
+          ].join(",")
+        )
+        .order("title", { ascending: true });
+
       if (error) {
+        console.error(error);
         toast.error("Failed to load resources.");
         return;
       }
       if (!alive) return;
-
-      const rows: Resource[] = (data ?? []).map((r: Resource) => ({
-        id: r.id,
-        title: r.title || "",
-        category: r.category || "",
-        description: r.description || "",
-        type: r.type || "website",
-        url: r.url || "",
-        image: r.image || "",
-        tags: Array.isArray(r.tags) ? r.tags : [],
-        downloads: r.downloads || 0,
-        views: r.views || 0,
-        is_verified: !!r.is_verified,
-      }));
-      setResources(rows);
-    }
+      setResources(
+        Array.isArray(data) && data.every((item) => typeof item === "object" && item !== null && "id" in item)
+          ? (data as DbResourceRow[]).map(toUi)
+          : []
+      );
+    };
 
     if (!sessionLoading) load();
 
+    // realtime
     const sub = supabase
       .channel("resources_changes_rm")
       .on("postgres_changes", { event: "*", schema: "public", table: "resources" }, (payload) => {
-        const r = payload.new as Resource;
-        const row: Resource = {
-          id: r?.id,
-          title: r?.title || "",
-          category: r?.category || "",
-          description: r?.description || "",
-          type: r?.type || "website",
-          url: r?.url || "",
-          image: r?.image || "",
-          tags: Array.isArray(r?.tags) ? r.tags : [],
-          downloads: r?.downloads || 0,
-          views: r?.views || 0,
-          is_verified: !!r?.is_verified,
-        };
+        if (payload.eventType === "DELETE") {
+          const delId = (payload.old as { id?: string } | null)?.id;
+          if (!delId) return;
+          setResources((prev) => prev.filter((x) => x.id !== delId));
+          return;
+        }
+
+        const r = payload.new as Partial<DbResourceRow> | null;
+        if (!r || !r.id) return;
+
+        const safe: UiResource = toUi({
+          id: r.id,
+          title: (r.title ?? "") as string,
+          category: (r.category ?? "") as string,
+          description: (r.description ?? "") as string,
+          type: (r.type ?? "website") as ResourceTypeDB,
+          url: (r.url ?? "") as string,
+          image: (r.image ?? "") as string,
+          tags: (Array.isArray(r.tags) ? r.tags : []) as string[],
+          downloads: Number(r.downloads ?? 0),
+          views: Number(r.views ?? 0),
+          is_verified: !!r.is_verified,
+        });
 
         if (payload.eventType === "INSERT") {
-          setResources((prev) => [row, ...prev]);
+          setResources((prev) => [safe, ...prev]);
         } else if (payload.eventType === "UPDATE") {
-          setResources((prev) => prev.map((x) => (x.id === row.id ? row : x)));
-        } else if (payload.eventType === "DELETE") {
-          setResources((prev) => prev.filter((x) => x.id !== (payload.old as Resource)?.id));
+          setResources((prev) => prev.map((x) => (x.id === safe.id ? safe : x)));
         }
       })
       .subscribe();
@@ -113,10 +177,13 @@ const ResourcesManagement = () => {
     };
   }, [sessionLoading]);
 
-  /** file handlers */
+  /* ---------- file handlers ---------- */
   const handleDocFile = (files: FileList | null) => {
-    const f = files && files[0] ? files[0] : null;
-    if (!f) { setFile(null); return; }
+    const f = files?.[0] ?? null;
+    if (!f) {
+      setFile(null);
+      return;
+    }
     if (f.type !== "application/pdf") {
       toast.error("Only PDF files are allowed.");
       return;
@@ -127,9 +194,13 @@ const ResourcesManagement = () => {
     }
     setFile(f);
   };
+
   const handleImageFile = (files: FileList | null) => {
-    const f = files && files[0] ? files[0] : null;
-    if (!f) { setImageFile(null); return; }
+    const f = files?.[0] ?? null;
+    if (!f) {
+      setImageFile(null);
+      return;
+    }
     const allowed = ["image/jpeg", "image/png", "image/webp"];
     if (!allowed.includes(f.type)) {
       toast.error("Image must be JPEG, PNG, or WEBP.");
@@ -142,34 +213,42 @@ const ResourcesManagement = () => {
     setImageFile(f);
   };
 
-  const uploadFile = async (bucket: string, f: File, setProgress?: (n: number) => void) => {
-    try { setProgress?.(10); } catch {
-      // Ignore errors from setProgress (e.g., if unmounted)
+  /* ---------- storage helpers ---------- */
+  const uploadToBucket = async (prefix: "pdfs" | "images", f: File) => {
+    const safeName = f.name.replace(/[^\w.-]/g, "_");
+    const path = `${prefix}/${Date.now()}_${safeName}`;
+    const { data, error } = await supabase.storage
+      .from(RESOURCES_BUCKET)
+      .upload(path, f, { cacheControl: "3600", upsert: false });
+    if (error) throw error;
+    const { data: pub } = supabase.storage.from(RESOURCES_BUCKET).getPublicUrl(data.path);
+    return pub.publicUrl;
+  };
+
+  const uploadFile = async (
+    prefix: "pdfs" | "images",
+    f: File,
+    setProgress?: (n: number) => void
+  ) => {
+    try {
+      setProgress?.(10);
+    } catch {
+      // ignore progress errors
     }
-    const url = await uploadToBucket(bucket, f);
-    try { setProgress?.(100); } catch {
-      // intentionally ignored
+    const url = await uploadToBucket(prefix, f);
+    try {
+      setProgress?.(100);
+    } catch {
+      // ignore progress errors
     }
     return url;
   };
 
-  /** storage helpers */
-  const uploadToBucket = async (bucket: string, f: File) => {
-    const path = `${Date.now()}_${f.name}`;
-    const { data, error } = await supabase.storage.from(bucket).upload(path, f, {
-      cacheControl: "3600",
-      upsert: false,
-    });
-    if (error) throw error;
-    const { data: pub } = supabase.storage.from(bucket).getPublicUrl(data.path);
-    return pub.publicUrl;
-  };
-
-  /** create / update */
+  /* ---------- create / update ---------- */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // basic checks
+    // required fields
     if (!formData.title || !formData.category || !formData.description) {
       toast.error("Fill all required fields.");
       return;
@@ -204,29 +283,23 @@ const ResourcesManagement = () => {
         imageUrl = "/placeholder-image.png";
       }
 
-      // Build minimal payload and only include relevant metrics to avoid DB constraints
-      const payload: Omit<Resource, "id"> = {
+      // payload aligned with DB columns
+      const payload: Omit<DbResourceRow, "id"> = {
         title: (formData.title || "").trim(),
         category: (formData.category || "").trim(),
         description: (formData.description || "").trim(),
-        type: (formData.type || "website") as "pdf" | "website",
+        type: (formData.type || "website") as ResourceTypeDB,
         url,
         image: imageUrl,
         tags: Array.isArray(formData.tags)
           ? (formData.tags as string[]).map((t) => t.trim()).filter(Boolean)
           : [],
         is_verified: !!formData.is_verified,
-        // views/downloads added conditionally below
-        downloads: 0,
-        views: 0,
+        downloads:
+          (formData.type === "pdf" ? Number(formData.downloads ?? 0) : 0) || 0,
+        views:
+          (formData.type === "website" ? Number(formData.views ?? 0) : 0) || 0,
       };
-      if (payload.type === "pdf") {
-        payload.downloads = Number(formData.downloads ?? 0) || 0;
-        payload.views = 0;
-      } else {
-        payload.views = Number(formData.views ?? 0) || 0;
-        payload.downloads = 0;
-      }
 
       if (isEditing && currentResource) {
         const { error } = await supabase.from("resources").update(payload).eq("id", currentResource.id);
@@ -239,25 +312,29 @@ const ResourcesManagement = () => {
       }
 
       resetForm();
-    } catch (err: unknown) {
-      console.error("Resource submit error:", err);
-      let msg = "Submit failed.";
-      if (typeof err === "object" && err !== null) {
-        if ("message" in err && typeof (err as { message?: string }).message === "string") {
-          msg = (err as { message?: string }).message!;
-        } else if ("details" in err && typeof (err as { details?: string }).details === "string") {
-          msg = (err as { details?: string }).details!;
-        }
-      }
-      toast.error(msg);
+    } catch (err) {
+      console.error(err);
+      const msg =
+        (typeof err === "object" &&
+          err &&
+          ("message" in err
+            ? (err as { message: string }).message
+            : "details" in err
+            ? (err as { details: string }).details
+            : null)) ||
+        "Submit failed.";
+      toast.error(String(msg));
     } finally {
       setBusy(false);
-      setTimeout(() => { setDocProgress(0); setImgProgress(0); }, 500);
+      setTimeout(() => {
+        setDocProgress(0);
+        setImgProgress(0);
+      }, 500);
     }
   };
 
-  /** edit / delete / verify */
-  const handleEdit = (r: Resource) => {
+  /* ---------- edit / delete / verify ---------- */
+  const handleEdit = (r: UiResource) => {
     setIsEditing(true);
     setCurrentResource(r);
     setFormData({
@@ -324,7 +401,8 @@ const ResourcesManagement = () => {
     setCurrentResource(null);
   };
 
-  const typeBadgeVariant = (t: string) => (t === "pdf" ? "destructive" : "default");
+  const typeBadgeVariant = (t: ResourceTypeDB): "destructive" | "default" =>
+    t === "pdf" ? "destructive" : "default";
 
   return (
     <SidebarProvider>
@@ -350,12 +428,12 @@ const ResourcesManagement = () => {
               const websites = resources.filter((r) => r.type === "website").length;
               const pdfs = resources.filter((r) => r.type === "pdf").length;
               const verified = resources.filter((r) => r.is_verified).length;
-              const plural = (n: number, s: string, p: string) => (n <= 1 ? s : p);
+              const plural = (n: number, s: string, p: string) => (n === 1 ? s : p);
               const stats = [
-                { title: plural(total, "Resource", "Resources"), value: total, description: total === 0 ? "No resources yet" : total === 1 ? "1 total resource" : `${total} total resources`, icon: Globe, bgColor: "bg-slate-100", color: "text-slate-600" },
-                { title: plural(websites, "Website", "Websites"), value: websites, description: websites === 0 ? "No websites" : websites === 1 ? "1 website" : `${websites} websites`, icon: Globe, bgColor: "bg-blue-100", color: "text-blue-600" },
-                { title: plural(pdfs, "PDF", "PDFs"), value: pdfs, description: pdfs === 0 ? "No PDFs" : pdfs === 1 ? "1 PDF" : `${pdfs} PDFs`, icon: FileText, bgColor: "bg-orange-100", color: "text-orange-600" },
-                { title: "Verified", value: verified, description: verified === 0 ? "Not verified yet" : verified === 1 ? "1 verified" : `${verified} verified`, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
+                { title: plural(total, "Resource", "Resources"), value: total, description: total === 0 ? "No resources yet" : `${total} total resources`, icon: Globe, bgColor: "bg-slate-100", color: "text-slate-600" },
+                { title: plural(websites, "Website", "Websites"), value: websites, description: websites === 0 ? "No websites" : `${websites} websites`, icon: Globe, bgColor: "bg-blue-100", color: "text-blue-600" },
+                { title: plural(pdfs, "PDF", "PDFs"), value: pdfs, description: pdfs === 0 ? "No PDFs" : `${pdfs} PDFs`, icon: FileText, bgColor: "bg-orange-100", color: "text-orange-600" },
+                { title: "Verified", value: verified, description: verified === 0 ? "Not verified yet" : `${verified} verified`, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
               ];
               return stats.map((s) => (
                 <Card key={s.title} className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
@@ -377,22 +455,20 @@ const ResourcesManagement = () => {
 
           {/* Category stats */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            {(() => {
-              const counts = (VALID_CATEGORIES as readonly string[]).map((c) => ({
-                cat: c,
-                value: resources.filter((r) => r.category === c).length,
-              }));
-              return counts.map(({ cat, value }) => (
+            {VALID_CATEGORIES.map((cat) => {
+              const value = resources.filter((r) => r.category === cat).length;
+              return (
                 <Card key={cat} className="rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/30 shadow-sm">
                   <CardContent className="p-4">
                     <div className="text-sm font-medium text-muted-foreground mb-1">{cat.replace("-", " ")}</div>
                     <div className="text-2xl font-semibold text-foreground">{value}</div>
                   </CardContent>
                 </Card>
-              ));
-            })()}
+              );
+            })}
           </div>
 
+          {/* Form */}
           <Card className="rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm">
             <CardHeader>
               <CardTitle>{isEditing ? "Edit Resource" : "Add New Resource"}</CardTitle>
@@ -415,7 +491,7 @@ const ResourcesManagement = () => {
                     <label className="text-sm font-medium">Category *</label>
                     <Select
                       value={formData.category || ""}
-                      onValueChange={(v) => setFormData({ ...formData, category: v })}
+                      onValueChange={(v) => setFormData({ ...formData, category: v as CategoryType })}
                       disabled={busy}
                     >
                       <SelectTrigger>
@@ -448,7 +524,7 @@ const ResourcesManagement = () => {
                     <label className="text-sm font-medium">Type *</label>
                     <Select
                       value={formData.type || "website"}
-                      onValueChange={(v) => setFormData({ ...formData, type: v as "pdf" | "website" })}
+                      onValueChange={(v) => setFormData({ ...formData, type: v as ResourceTypeDB })}
                       disabled={busy}
                     >
                       <SelectTrigger>
@@ -466,15 +542,13 @@ const ResourcesManagement = () => {
                       {formData.type === "pdf" ? "Upload PDF *" : "Website URL *"}
                     </label>
                     {formData.type === "pdf" ? (
-                      <div
-                        className="group relative flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center transition-colors hover:bg-muted/30"
-                      >
+                      <div className="group relative flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 p-6 text-center transition-colors hover:bg-muted/30">
                         <FileText className="mb-2 h-6 w-6 text-muted-foreground" />
                         <p className="text-sm text-muted-foreground">
                           {file ? (
                             <span className="text-foreground font-medium">{file.name}</span>
                           ) : (
-                            <>Click to select or drag & drop a PDF</>
+                            <>Click to select or drag &amp; drop a PDF</>
                           )}
                         </p>
                         <input
@@ -509,6 +583,8 @@ const ResourcesManagement = () => {
                   <div className="group relative flex items-center gap-4 rounded-xl border border-dashed border-border/60 bg-muted/20 p-4 transition-colors hover:bg-muted/30">
                     <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md ring-1 ring-border/40">
                       {imageFile ? (
+                        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                        // @ts-ignore: createObjectURL available in browser
                         <img src={URL.createObjectURL(imageFile)} alt="preview" className="h-full w-full object-cover" />
                       ) : formData.image ? (
                         <img src={formData.image} alt="current" className="h-full w-full object-cover" />
@@ -521,7 +597,7 @@ const ResourcesManagement = () => {
                         {imageFile ? (
                           <span className="text-foreground font-medium">{imageFile.name}</span>
                         ) : (
-                          <>Click to select or drag & drop an image (PNG/JPG/WEBP)</>
+                          <>Click to select or drag &amp; drop an image (PNG/JPG/WEBP)</>
                         )}
                       </p>
                       <p className="text-xs text-muted-foreground">Max 5MB</p>
@@ -545,14 +621,11 @@ const ResourcesManagement = () => {
                   <label className="text-sm font-medium">Tags (comma-separated)</label>
                   <Input
                     placeholder="safety, legal, support"
-                    value={Array.isArray(formData.tags) ? formData.tags.join(", ") : ""}
+                    value={Array.isArray(formData.tags) ? (formData.tags as string[]).join(", ") : ""}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        tags: e.target.value
-                          .split(",")
-                          .map((t) => t.trim())
-                          .filter(Boolean),
+                        tags: e.target.value.split(",").map((t) => t.trim()).filter(Boolean),
                       })
                     }
                     disabled={busy}
@@ -585,6 +658,7 @@ const ResourcesManagement = () => {
             </CardContent>
           </Card>
 
+          {/* Table */}
           <Card className="rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm">
             <CardHeader>
               <CardTitle>Manage Resources</CardTitle>
@@ -608,7 +682,7 @@ const ResourcesManagement = () => {
                     {resources.map((r) => (
                       <TableRow key={r.id}>
                         <TableCell className="font-medium text-foreground">{r.title}</TableCell>
-                        <TableCell>{r.category.replace("-", " ")}</TableCell>
+                        <TableCell>{(r.category || "").replace("-", " ")}</TableCell>
                         <TableCell>
                           <Badge variant={typeBadgeVariant(r.type)}>
                             {r.type === "pdf" ? <FileText className="h-3 w-3 mr-1" /> : <Globe className="h-3 w-3 mr-1" />}
@@ -621,7 +695,7 @@ const ResourcesManagement = () => {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {r.type === "pdf" ? `${r.downloads || 0} downloads` : `${r.views || 0} views`}
+                          {r.type === "pdf" ? `${r.downloads} downloads` : `${r.views} views`}
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-2">

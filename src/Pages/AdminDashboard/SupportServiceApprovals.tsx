@@ -1,4 +1,4 @@
-// SupportServiceApprovals.tsx
+// src/components/admin/SupportServiceApprovals.tsx
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -26,11 +26,85 @@ import {
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { SupportService } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import AdminHeader from "@/components/admin/AdminHeader";
 
-/** ===== Constants / helpers ===== */
+/* ===== Constants / local types aligned to DB ===== */
+const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
+type ServiceType = (typeof VALID_TYPES)[number];
+
+type Availability = "available" | "limited" | "unavailable";
+type ApprovalStatus = "pending" | "approved" | "rejected";
+
+type DbSupportRow = {
+  id: string;
+  name: string | null;
+  type: ServiceType | string | null;
+  title: string | null;
+  specialization: string | null;
+  description: string | null;
+  contact_info: {
+    address?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  } | null;
+  website: string | null;
+  avatar: string | null;
+  rating: number | null;
+  reviews: number | null;
+  verified: boolean | null;
+  availability: Availability | string | null;
+  status: ApprovalStatus | string | null;
+  credentials: string | null;
+  languages: string[] | null;
+  tags: string[] | null;
+  updated_at?: string | null;
+};
+
+type UiSupport = {
+  id: string;
+  name: string;
+  type: ServiceType;
+  title: string;
+  specialization: string;
+  description: string;
+  contact_info: { address: string; phone: string; email: string };
+  website: string;
+  avatar: string;
+  rating: number | null;
+  reviews: number;
+  verified: boolean;
+  availability: Availability;
+  status: ApprovalStatus;
+  credentials: string;
+  languages: string[];
+  tags: string[];
+};
+
+const toUi = (s: DbSupportRow): UiSupport => ({
+  id: s.id,
+  name: s.name ?? "",
+  type: (VALID_TYPES.includes((s.type ?? "") as ServiceType) ? (s.type as ServiceType) : "lawyer"),
+  title: s.title ?? "",
+  specialization: s.specialization ?? "",
+  description: s.description ?? "",
+  contact_info: {
+    address: s.contact_info?.address ?? "",
+    phone: s.contact_info?.phone ?? "",
+    email: s.contact_info?.email ?? "",
+  },
+  website: s.website ?? "",
+  avatar: s.avatar ?? "",
+  rating: s.rating ?? null,
+  reviews: Number(s.reviews ?? 0),
+  verified: !!s.verified,
+  availability: (["available", "limited", "unavailable"].includes(String(s.availability)) ? (s.availability as Availability) : "unavailable"),
+  status: (["pending", "approved", "rejected"].includes(String(s.status)) ? (s.status as ApprovalStatus) : "pending"),
+  credentials: s.credentials ?? "",
+  languages: Array.isArray(s.languages) ? s.languages : [],
+  tags: Array.isArray(s.tags) ? s.tags : [],
+});
+
 const typeIcons: Record<ServiceType, React.ComponentType<{ className?: string }>> = {
   lawyer: Scale,
   therapist: Heart,
@@ -38,132 +112,84 @@ const typeIcons: Record<ServiceType, React.ComponentType<{ className?: string }>
   "support-group": Users,
 };
 
-const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
-type ServiceType = (typeof VALID_TYPES)[number];
-
-
-/** ===== Page ===== */
 const SupportServiceApprovals = () => {
   const { loading: sessionLoading } = useAdminSession();
 
-  const [support, setSupport] = useState<SupportService[]>([]);
+  const [support, setSupport] = useState<UiSupport[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | ServiceType>("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
-  const [selectedSupport, setSelectedSupport] = useState<SupportService | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | ApprovalStatus>("all");
+  const [selectedSupport, setSelectedSupport] = useState<UiSupport | null>(null);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Route is guarded globally; no per-page gate
-
-  /** load + realtime */
+  /* load + realtime */
   useEffect(() => {
     if (sessionLoading) return;
     let alive = true;
 
-    // Move the SupportServiceRow interface outside the load function
-    interface SupportServiceRow {
-      id: string;
-      name: string;
-      type: string;
-      title: string;
-      specialization: string;
-      description: string;
-      contact_info: {
-        address: string;
-        phone: string;
-        email: string;
-      };
-      website: string;
-      avatar: string;
-      rating: number | null;
-      reviews: number;
-      verified: boolean;
-      availability: string;
-      status: string;
-      credentials: string;
-      languages: string[];
-      tags: string[];
-    }
-
-    async function load() {
+    const load = async () => {
       try {
         setLoading(true);
-        const { data, error } = await supabase.from("support_services").select("*");
+        const { data, error } = await supabase
+          .from("support_services")
+          .select(
+            [
+              "id",
+              "name",
+              "type",
+              "title",
+              "specialization",
+              "description",
+              "contact_info",
+              "website",
+              "avatar",
+              "rating",
+              "reviews",
+              "verified",
+              "availability",
+              "status",
+              "credentials",
+              "languages",
+              "tags",
+              "updated_at",
+            ].join(",")
+          )
+          .order("updated_at", { ascending: false, nullsFirst: false });
+
         if (error) throw error;
-
         if (!alive) return;
-
-        const rows: SupportService[] = (data ?? []).map((s: SupportServiceRow) => ({
-          id: s.id,
-          name: s.name || "",
-          type: (s.type || "lawyer") as ServiceType,
-          title: s.title || "",
-          specialization: s.specialization || "",
-          description: s.description || "",
-          contact_info: {
-            address: s.contact_info?.address || "",
-            phone: s.contact_info?.phone || "",
-            email: s.contact_info?.email || "",
-          },
-          website: s.website || "",
-          avatar: s.avatar || "",
-          rating: s.rating ?? null,
-          reviews: s.reviews || 0,
-          verified: !!s.verified,
-          availability: (["available", "limited", "unavailable"].includes(s.availability) ? s.availability : "unavailable") as "available" | "limited" | "unavailable",
-          status: (["pending", "approved", "rejected"].includes(s.status) ? s.status : "pending") as "pending" | "approved" | "rejected",
-          credentials: s.credentials || "",
-          languages: Array.isArray(s.languages) ? s.languages : [],
-          tags: Array.isArray(s.tags) ? s.tags : [],
-        }));
-
-        setSupport(rows);
+        setSupport(
+          Array.isArray(data) && data.every(item => typeof item === "object" && item !== null && "id" in item)
+            ? (data as DbSupportRow[]).map(toUi)
+            : []
+        );
       } catch (err) {
         console.error(err);
-        toast.error("Failed to fetch support services. Please try again.");
+        toast.error("Failed to fetch support services.");
       } finally {
         if (alive) setLoading(false);
       }
-    }
+    };
 
     load();
 
     const sub = supabase
       .channel("support_services_realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "support_services" }, (payload) => {
-        const s = payload.new as SupportServiceRow;
-        const row: SupportService = {
-          id: s?.id,
-          name: s?.name || "",
-          type: (s?.type || "lawyer") as ServiceType,
-          title: s?.title || "",
-          specialization: s?.specialization || "",
-          description: s?.description || "",
-          contact_info: {
-            address: s?.contact_info?.address || "",
-            phone: s?.contact_info?.phone || "",
-            email: s?.contact_info?.email || "",
-          },
-          website: s?.website || "",
-          avatar: s?.avatar || "",
-          rating: s?.rating ?? null,
-          reviews: s?.reviews || 0,
-          verified: !!s?.verified,
-          availability: (["available", "limited", "unavailable"].includes(s?.availability) ? s.availability : "unavailable") as "available" | "limited" | "unavailable",
-          status: (["pending", "approved", "rejected"].includes(s?.status) ? s.status : "pending") as "pending" | "approved" | "rejected",
-          credentials: s?.credentials || "",
-          languages: Array.isArray(s?.languages) ? s.languages : [],
-          tags: Array.isArray(s?.tags) ? s.tags : [],
-        };
-
+        if (payload.eventType === "DELETE") {
+          const delId = (payload.old as { id?: string } | null)?.id;
+          if (!delId) return;
+          setSupport((prev) => prev.filter((x) => x.id !== delId));
+          return;
+        }
+        const s = payload.new as DbSupportRow;
+        const row = toUi(s);
         if (payload.eventType === "INSERT") {
           setSupport((prev) => [row, ...prev]);
         } else if (payload.eventType === "UPDATE") {
           setSupport((prev) => prev.map((x) => (x.id === row.id ? row : x)));
-        } else if (payload.eventType === "DELETE") {
-          setSupport((prev) => prev.filter((x) => x.id !== (payload.old as SupportServiceRow)?.id));
         }
       })
       .subscribe();
@@ -174,13 +200,13 @@ const SupportServiceApprovals = () => {
     };
   }, [sessionLoading]);
 
-  /** actions */
-  const handleView = (item: SupportService) => {
+  /* actions */
+  const handleView = (item: UiSupport) => {
     setSelectedSupport(item);
     setShowViewDialog(true);
   };
 
-  const handleEdit = (item: SupportService) => {
+  const handleEdit = (item: UiSupport) => {
     setSelectedSupport(item);
     setShowEditDialog(true);
   };
@@ -191,14 +217,10 @@ const SupportServiceApprovals = () => {
       setLoading(true);
       const { error } = await supabase.from("support_services").delete().eq("id", id);
       if (error) throw error;
-      toast.success("Support service deleted successfully.");
+      toast.success("Support service deleted.");
     } catch (err: unknown) {
       console.error(err);
-      if (err instanceof Error) {
-        toast.error(err.message || "Failed to delete support service.");
-      } else {
-        toast.error("Failed to delete support service.");
-      }
+      toast.error("Failed to delete support service.");
     } finally {
       setLoading(false);
     }
@@ -212,14 +234,10 @@ const SupportServiceApprovals = () => {
         .update({ status: "approved", updated_at: new Date().toISOString() })
         .eq("id", id);
       if (error) throw error;
-      toast.success("Support service approved successfully.");
-    } catch (err: unknown) {
+      toast.success("Support service approved.");
+    } catch (err) {
       console.error(err);
-      if (err instanceof Error) {
-        toast.error(err.message || "Failed to approve support service.");
-      } else {
-        toast.error("Failed to approve support service.");
-      }
+      toast.error("Failed to approve support service.");
     } finally {
       setLoading(false);
     }
@@ -233,14 +251,10 @@ const SupportServiceApprovals = () => {
         .update({ status: "rejected", updated_at: new Date().toISOString() })
         .eq("id", id);
       if (error) throw error;
-      toast.success("Support service rejected successfully.");
-    } catch (err: unknown) {
+      toast.success("Support service rejected.");
+    } catch (err) {
       console.error(err);
-      if (err instanceof Error) {
-        toast.error(err.message || "Failed to reject support service.");
-      } else {
-        toast.error("Failed to reject support service.");
-      }
+      toast.error("Failed to reject support service.");
     } finally {
       setLoading(false);
     }
@@ -248,41 +262,46 @@ const SupportServiceApprovals = () => {
 
   const handleUpdateSupport = async () => {
     if (!selectedSupport) return;
-    if (!VALID_TYPES.includes(selectedSupport.type as ServiceType)) {
-      toast.error("Invalid service type selected.");
+    if (!VALID_TYPES.includes(selectedSupport.type)) {
+      toast.error("Invalid service type.");
       return;
     }
     try {
       setLoading(true);
-      const { error } = await supabase
-        .from("support_services")
-        .update({
-          name: selectedSupport.name,
-          type: selectedSupport.type,
-          title: selectedSupport.title,
-          specialization: selectedSupport.specialization,
-          description: selectedSupport.description,
-          contact_info: selectedSupport.contact_info,
-          website: selectedSupport.website,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedSupport.id);
+      const payload: Omit<DbSupportRow, "id"> = {
+        name: selectedSupport.name,
+        type: selectedSupport.type,
+        title: selectedSupport.title,
+        specialization: selectedSupport.specialization,
+        description: selectedSupport.description,
+        contact_info: selectedSupport.contact_info,
+        website: selectedSupport.website,
+        avatar: selectedSupport.avatar,
+        rating: selectedSupport.rating,
+        reviews: selectedSupport.reviews,
+        verified: selectedSupport.verified,
+        availability: selectedSupport.availability,
+        status: selectedSupport.status,
+        credentials: selectedSupport.credentials,
+        languages: selectedSupport.languages,
+        tags: selectedSupport.tags,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase.from("support_services").update(payload).eq("id", selectedSupport.id);
       if (error) throw error;
       setShowEditDialog(false);
-      toast.success("Support service updated successfully.");
-    } catch (err: unknown) {
+      toast.success("Support service updated.");
+    } catch (err) {
       console.error(err);
-      if (err instanceof Error) {
-        toast.error(err.message || "Failed to update support service.");
-      } else {
-        toast.error("Failed to update support service.");
-      }
+      toast.error("Failed to update support service.");
     } finally {
       setLoading(false);
     }
   };
 
-  const getStatusColor = (status: string) => {
+  /* helpers */
+  const getStatusColor = (status: ApprovalStatus | string): "default" | "outline" | "destructive" | "secondary" => {
     switch (status) {
       case "approved":
         return "default";
@@ -295,7 +314,7 @@ const SupportServiceApprovals = () => {
     }
   };
 
-  const getAvailabilityColor = (availability: string) => {
+  const getAvailabilityColor = (availability: Availability | string): "default" | "outline" | "destructive" | "secondary" => {
     switch (availability) {
       case "available":
         return "default";
@@ -308,7 +327,7 @@ const SupportServiceApprovals = () => {
     }
   };
 
-  /** filters */
+  /* filters */
   const filteredSupport = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return support.filter((item) => {
@@ -358,12 +377,12 @@ const SupportServiceApprovals = () => {
               const approved = support.filter((s) => s.status === "approved").length;
               const pending = support.filter((s) => s.status === "pending").length;
               const rejected = support.filter((s) => s.status === "rejected").length;
-              const plural = (n: number, s: string, p: string) => (n <= 1 ? s : p);
+              const plural = (n: number, s: string, p: string) => (n === 1 ? s : p);
               const stats = [
-                { title: plural(total, "Service", "Services"), value: total, description: total === 0 ? "No services yet" : total === 1 ? "1 total service" : `${total} total services`, icon: Users, bgColor: "bg-slate-100", color: "text-slate-600" },
-                { title: "Approved", value: approved, description: approved === 0 ? "No approved services" : approved === 1 ? "1 approved" : `${approved} approved`, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
-                { title: "Pending", value: pending, description: pending === 0 ? "No pending reviews" : pending === 1 ? "1 pending review" : `${pending} pending reviews`, icon: Scale, bgColor: "bg-blue-100", color: "text-blue-600" },
-                { title: "Rejected", value: rejected, description: rejected === 0 ? "No rejections" : rejected === 1 ? "1 rejected" : `${rejected} rejected`, icon: XCircle, bgColor: "bg-red-100", color: "text-red-600" },
+                { title: plural(total, "Service", "Services"), value: total, description: total === 0 ? "No services yet" : `${total} total services`, icon: Users, bgColor: "bg-slate-100", color: "text-slate-600" },
+                { title: "Approved", value: approved, description: approved === 0 ? "No approved services" : `${approved} approved`, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
+                { title: "Pending", value: pending, description: pending === 0 ? "No pending reviews" : `${pending} pending reviews`, icon: Scale, bgColor: "bg-blue-100", color: "text-blue-600" },
+                { title: "Rejected", value: rejected, description: rejected === 0 ? "No rejections" : `${rejected} rejected`, icon: XCircle, bgColor: "bg-red-100", color: "text-red-600" },
               ];
               return stats.map((s) => (
                 <Card key={s.title} className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
@@ -424,7 +443,7 @@ const SupportServiceApprovals = () => {
 
                   <Select
                     value={statusFilter}
-                    onValueChange={(v) => setStatusFilter(v as "all" | "pending" | "approved" | "rejected")}
+                    onValueChange={(v) => setStatusFilter(v as "all" | ApprovalStatus)}
                     disabled={loading}
                     aria-label="Filter by status"
                   >
@@ -451,6 +470,9 @@ const SupportServiceApprovals = () => {
             <div className="grid gap-4">
               {filteredSupport.map((item) => {
                 const IconComponent = typeIcons[item.type] || Users;
+                const cityRegion = item.contact_info.address
+                  ? item.contact_info.address.split(",").slice(-2).join(",")
+                  : "—";
                 return (
                   <Card key={item.id} className="group rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/30 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
                     <CardContent className="p-6">
@@ -471,7 +493,7 @@ const SupportServiceApprovals = () => {
                             <div className="flex items-center space-x-4 text-xs text-muted-foreground">
                               <div className="flex items-center space-x-1">
                                 <MapPin className="h-3 w-3" />
-                                <span>{item.contact_info.address.split(",").slice(-2).join(",")}</span>
+                                <span>{cityRegion}</span>
                               </div>
                               {item.rating && item.rating > 0 && (
                                 <div className="flex items-center space-x-1">
@@ -481,7 +503,7 @@ const SupportServiceApprovals = () => {
                                   </span>
                                 </div>
                               )}
-                              <div>Languages: {item.languages.join(", ")}</div>
+                              {item.languages.length > 0 && <div>Languages: {item.languages.join(", ")}</div>}
                             </div>
                           </div>
                         </div>
@@ -655,9 +677,7 @@ const SupportServiceApprovals = () => {
                       <Label className="text-sm font-medium">Name</Label>
                       <Input
                         value={selectedSupport.name}
-                        onChange={(e) =>
-                          setSelectedSupport({ ...selectedSupport, name: e.target.value })
-                        }
+                        onChange={(e) => setSelectedSupport({ ...selectedSupport, name: e.target.value })}
                         disabled={loading}
                         required
                       />
@@ -666,9 +686,7 @@ const SupportServiceApprovals = () => {
                       <Label className="text-sm font-medium">Type</Label>
                       <Select
                         value={selectedSupport.type}
-                        onValueChange={(v) =>
-                          setSelectedSupport({ ...selectedSupport, type: v as ServiceType })
-                        }
+                        onValueChange={(v) => setSelectedSupport({ ...selectedSupport, type: v as ServiceType })}
                         disabled={loading}
                         required
                       >
@@ -690,9 +708,7 @@ const SupportServiceApprovals = () => {
                     <Label className="text-sm font-medium">Title</Label>
                     <Input
                       value={selectedSupport.title}
-                      onChange={(e) =>
-                        setSelectedSupport({ ...selectedSupport, title: e.target.value })
-                      }
+                      onChange={(e) => setSelectedSupport({ ...selectedSupport, title: e.target.value })}
                       disabled={loading}
                       required
                     />
@@ -702,12 +718,7 @@ const SupportServiceApprovals = () => {
                     <Label className="text-sm font-medium">Specialization</Label>
                     <Input
                       value={selectedSupport.specialization}
-                      onChange={(e) =>
-                        setSelectedSupport({
-                          ...selectedSupport,
-                          specialization: e.target.value,
-                        })
-                      }
+                      onChange={(e) => setSelectedSupport({ ...selectedSupport, specialization: e.target.value })}
                       disabled={loading}
                       required
                     />
@@ -717,9 +728,7 @@ const SupportServiceApprovals = () => {
                     <Label className="text-sm font-medium">Description</Label>
                     <Textarea
                       value={selectedSupport.description}
-                      onChange={(e) =>
-                        setSelectedSupport({ ...selectedSupport, description: e.target.value })
-                      }
+                      onChange={(e) => setSelectedSupport({ ...selectedSupport, description: e.target.value })}
                       disabled={loading}
                       required
                     />
@@ -733,10 +742,7 @@ const SupportServiceApprovals = () => {
                         onChange={(e) =>
                           setSelectedSupport({
                             ...selectedSupport,
-                            contact_info: {
-                              ...selectedSupport.contact_info,
-                              address: e.target.value,
-                            },
+                            contact_info: { ...selectedSupport.contact_info, address: e.target.value },
                           })
                         }
                         disabled={loading}
@@ -750,10 +756,7 @@ const SupportServiceApprovals = () => {
                         onChange={(e) =>
                           setSelectedSupport({
                             ...selectedSupport,
-                            contact_info: {
-                              ...selectedSupport.contact_info,
-                              phone: e.target.value,
-                            },
+                            contact_info: { ...selectedSupport.contact_info, phone: e.target.value },
                           })
                         }
                         disabled={loading}
@@ -770,10 +773,7 @@ const SupportServiceApprovals = () => {
                         onChange={(e) =>
                           setSelectedSupport({
                             ...selectedSupport,
-                            contact_info: {
-                              ...selectedSupport.contact_info,
-                              email: e.target.value,
-                            },
+                            contact_info: { ...selectedSupport.contact_info, email: e.target.value },
                           })
                         }
                         disabled={loading}
@@ -784,9 +784,7 @@ const SupportServiceApprovals = () => {
                       <Label className="text-sm font-medium">Website</Label>
                       <Input
                         value={selectedSupport.website}
-                        onChange={(e) =>
-                          setSelectedSupport({ ...selectedSupport, website: e.target.value })
-                        }
+                        onChange={(e) => setSelectedSupport({ ...selectedSupport, website: e.target.value })}
                         disabled={loading}
                       />
                     </div>
@@ -796,9 +794,7 @@ const SupportServiceApprovals = () => {
                     <Label className="text-sm font-medium">Credentials</Label>
                     <Input
                       value={selectedSupport.credentials}
-                      onChange={(e) =>
-                        setSelectedSupport({ ...selectedSupport, credentials: e.target.value })
-                      }
+                      onChange={(e) => setSelectedSupport({ ...selectedSupport, credentials: e.target.value })}
                       disabled={loading}
                       required
                     />
@@ -811,10 +807,7 @@ const SupportServiceApprovals = () => {
                       onChange={(e) =>
                         setSelectedSupport({
                           ...selectedSupport,
-                          languages: e.target.value
-                            .split(",")
-                            .map((x) => x.trim())
-                            .filter(Boolean),
+                          languages: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
                         })
                       }
                       disabled={loading}
@@ -829,10 +822,7 @@ const SupportServiceApprovals = () => {
                       onChange={(e) =>
                         setSelectedSupport({
                           ...selectedSupport,
-                          tags: e.target.value
-                            .split(",")
-                            .map((x) => x.trim())
-                            .filter(Boolean),
+                          tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
                         })
                       }
                       disabled={loading}
@@ -844,10 +834,7 @@ const SupportServiceApprovals = () => {
                     <Select
                       value={selectedSupport.availability}
                       onValueChange={(v) =>
-                        setSelectedSupport({
-                          ...selectedSupport,
-                          availability: v as "available" | "limited" | "unavailable",
-                        })
+                        setSelectedSupport({ ...selectedSupport, availability: v as Availability })
                       }
                       disabled={loading}
                       required
@@ -868,10 +855,7 @@ const SupportServiceApprovals = () => {
                     <Select
                       value={selectedSupport.status}
                       onValueChange={(v) =>
-                        setSelectedSupport({
-                          ...selectedSupport,
-                          status: v as "pending" | "approved" | "rejected",
-                        })
+                        setSelectedSupport({ ...selectedSupport, status: v as ApprovalStatus })
                       }
                       disabled={loading}
                       required
@@ -888,12 +872,7 @@ const SupportServiceApprovals = () => {
                   </div>
 
                   <div className="flex justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setShowEditDialog(false)}
-                      disabled={loading}
-                    >
+                    <Button type="button" variant="outline" onClick={() => setShowEditDialog(false)} disabled={loading}>
                       Cancel
                     </Button>
                     <Button type="submit" disabled={loading}>

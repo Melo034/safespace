@@ -1,17 +1,18 @@
 import { useState, useEffect } from "react";
 import supabase from "@/server/supabase";
-import  Navbar  from "@/components/utils/Navbar";
+import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, ExternalLink, FileText, Globe, Search, Filter, Heart, BookOpen, Scale, Shield, Phone, Sparkles, Bookmark } from "lucide-react";
+import {
+  Download, ExternalLink, FileText, Globe, Search, Filter, Heart, BookOpen, Scale, Shield, Phone, Sparkles, Bookmark
+} from "lucide-react";
 import { toast } from "sonner";
 import LiveChat from "@/components/Home/LiveChat";
 import { useLocation } from "react-router-dom";
-import ResourceCollections from "@/components/Resources/Collections";
 import type { Resource } from "@/lib/types";
 import { useSavedItems } from "@/hooks/useSavedItems";
 
@@ -41,39 +42,50 @@ const Resources = () => {
         setLoading(true);
         const { data, error } = await supabase
           .from("resources")
-          .select("*")
+          .select("id,title,category,description,type,url,image,tags,downloads,views,is_verified")
           .eq("is_verified", true);
+
         if (error) throw error;
 
-        const cleaned: Resource[] = (data ?? []).map((r: unknown) => {
-          const row = r as {
-            id: Resource["id"];
-            title?: string | null;
-            category?: string | null;
-            description?: string | null;
-            type?: "website" | "pdf" | null;
-            url?: string | null;
-            image?: string | null;
-            tags?: string[] | null;
-            downloads?: number | null;
-            views?: number | null;
-            is_verified?: boolean | null;
-          };
+        type SupabaseResource = {
+          id: string;
+          title: string;
+          category: string | null;
+          description: string;
+          type: string;
+          url: string;
+          image: string;
+          tags: string[] | null;
+          downloads: number | null;
+          views: number | null;
+          is_verified: boolean;
+        };
+
+        const cleaned: Resource[] = (data ?? []).map((r) => {
+          const resource = r as SupabaseResource;
+          // Narrow/normalize each field to match our DB schema + UI expectations
+          const catRaw = resource.category;
+          const cat = (VALID_CATEGORIES as readonly string[]).includes(catRaw ?? "")
+            ? (catRaw as CategoryType)
+            : ("" as CategoryType | "");
+          const typeRaw = (resource.type ?? "website") as string;
+          const typeNorm = typeRaw === "pdf" ? "pdf" : "website";
 
           return {
-            id: row.id,
-            title: row.title ?? "",
-            category: (row.category as CategoryType) ?? "",
-            description: row.description ?? "",
-            type: (row.type as "website" | "pdf") ?? "website",
-            url: row.url ?? "",
-            image: row.image ?? "",
-            tags: Array.isArray(row.tags) ? row.tags : [],
-            downloads: row.downloads ?? 0,
-            views: row.views ?? 0,
-            is_verified: !!row.is_verified,
+            id: resource.id as Resource["id"],
+            title: resource.title ?? "",
+            category: cat as CategoryType,
+            description: resource.description ?? "",
+            type: typeNorm as "pdf" | "website",
+            url: resource.url ?? "",
+            image: resource.image ?? "",
+            tags: Array.isArray(resource.tags) ? (resource.tags as string[]) : [],
+            downloads: Number(resource.downloads ?? 0),
+            views: Number(resource.views ?? 0),
+            is_verified: Boolean(resource.is_verified),
           } as Resource;
         });
+
         setResources(cleaned);
       } catch (err) {
         console.error("Error fetching resources:", err);
@@ -84,8 +96,6 @@ const Resources = () => {
     };
 
     load();
-    // No realtime subscription; just initial load
-    return;
   }, []);
 
   // Apply Starter Kit from URL (?kit=legal-aid|safety-planning|counseling|emergency|education)
@@ -93,23 +103,19 @@ const Resources = () => {
     try {
       const params = new URLSearchParams(location.search);
       const kit = params.get("kit");
-      const allowed = ["safety-planning", "legal-aid", "counseling", "emergency", "education"] as const;
-      if (kit && (allowed as readonly string[]).includes(kit)) {
-        setCategoryFilter(kit as CategoryType);
-      }
+      const allowed = VALID_CATEGORIES as readonly string[];
+      if (kit && allowed.includes(kit)) setCategoryFilter(kit as CategoryType);
     } catch {
-      // Intentionally left blank: ignore invalid kit param
+      /* ignore invalid querystring */
     }
   }, [location.search]);
 
   const openResource = (resource: Resource) => {
     try {
       if (resource.type === "website") {
-        // Validate URL
         const u = new URL(resource.url);
         window.open(u.toString(), "_blank", "noopener,noreferrer");
       } else {
-        // PDF or file
         const link = document.createElement("a");
         link.href = resource.url;
         link.download = resource.title || "download";
@@ -123,29 +129,49 @@ const Resources = () => {
   };
 
   const incrementMetric = async (resource: Resource) => {
-    // Non-blocking; ignore failures (RLS may block public updates)
+    // Best-effort: try RPC first (atomic in DB). If not present, fall back to a direct update.
     type Metric = "downloads" | "views";
     const metric: Metric = resource.type === "pdf" ? "downloads" : "views";
+
     try {
       const { error } = await supabase.rpc("bump_resource_metric", {
         _id: resource.id,
         _metric: metric,
       });
-      if (!error) {
-        setResources((prev) =>
-          prev.map((r) =>
-            r.id === resource.id ? { ...r, [metric]: ((r as Pick<Resource, Metric>)[metric] ?? 0) + 1 } : r
-          )
-        );
+
+      if (error) {
+        // If RPC is missing (PGRST202), attempt a non-atomic update as a fallback.
+        type SupabaseError = { code?: string };
+        const err = error as SupabaseError;
+        if (err.code === "PGRST202") {
+          const next = (resource[metric] ?? 0) + 1;
+          await supabase.from("resources").update({ [metric]: next }).eq("id", resource.id);
+        } else {
+          throw error;
+        }
       }
+
+      // Optimistic UI
+      setResources((prev) =>
+        prev.map((r) =>
+          r.id === resource.id
+            ? {
+              ...r,
+              [metric]:
+                metric === "downloads"
+                  ? (r.downloads ?? 0) + 1
+                  : (r.views ?? 0) + 1,
+            }
+            : r
+        )
+      );
     } catch (e) {
-      // Silent: metrics are best-effort for public users under RLS
-      console.debug("Metric update failed (likely RLS):", e);
+      // Silent: public users may be blocked by RLS; UI already updated optimistically
+      console.debug("Metric update failed:", e);
     }
   };
 
   const handleResourceClick = (resource: Resource) => {
-    // Good UX: open first, then try to record the metric
     openResource(resource);
     incrementMetric(resource);
   };
@@ -220,7 +246,7 @@ const Resources = () => {
                       <div className="flex items-center space-x-2">
                         <IconComponent className="h-5 w-5 text-primary" />
                         <Badge variant="outline" className="text-xs">
-                          {resource.category.replace("-", " ")}
+                          {String(resource.category || "").replace("-", " ")}
                         </Badge>
                       </div>
                       <CardTitle className="text-lg line-clamp-2 group-hover:text-primary transition-colors">
@@ -243,35 +269,35 @@ const Resources = () => {
                             : `${resource.views ?? 0} views`}
                         </div>
                         <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleResourceClick(resource)}
-                          aria-label={
-                            resource.type === "pdf"
-                              ? `Download ${resource.title}`
-                              : `Visit ${resource.title}`
-                          }
-                        >
-                          {resource.type === "pdf" ? (
-                            <>
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </>
-                          ) : (
-                            <>
-                              <ExternalLink className="h-4 w-4 mr-2" />
-                              Visit
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
-                          aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
-                        >
-                          <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
-                        </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => handleResourceClick(resource)}
+                            aria-label={
+                              resource.type === "pdf"
+                                ? `Download ${resource.title}`
+                                : `Visit ${resource.title}`
+                            }
+                          >
+                            {resource.type === "pdf" ? (
+                              <>
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </>
+                            ) : (
+                              <>
+                                <ExternalLink className="h-4 w-4 mr-2" />
+                                Visit
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
+                            aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
+                          >
+                            <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                          </Button>
                         </div>
                       </div>
                     </CardContent>
@@ -290,7 +316,6 @@ const Resources = () => {
             </div>
           )}
         </div>
-        <ResourceCollections />
         <div className="max-w-6xl mx-auto mb-8">
           <Card>
             <CardHeader>
@@ -390,7 +415,7 @@ const Resources = () => {
                       <div className="flex items-center space-x-2 mb-2">
                         <IconComponent className="h-4 w-4 text-primary" />
                         <Badge variant="outline" className="text-xs">
-                          {resource.category.replace("-", " ")}
+                          {String(resource.category || "").replace("-", " ")}
                         </Badge>
                       </div>
                       <CardTitle className="text-lg line-clamp-2 group-hover:text-primary transition-colors">
@@ -413,35 +438,35 @@ const Resources = () => {
                             : `${resource.views ?? 0} views`}
                         </div>
                         <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => handleResourceClick(resource)}
-                          aria-label={
-                            resource.type === "pdf"
-                              ? `Download ${resource.title}`
-                              : `Visit ${resource.title}`
-                          }
-                        >
-                          {resource.type === "pdf" ? (
-                            <>
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </>
-                          ) : (
-                            <>
-                              <ExternalLink className="h-4 w-4 mr-2" />
-                              Visit
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
-                          aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
-                        >
-                          <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
-                        </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => handleResourceClick(resource)}
+                            aria-label={
+                              resource.type === "pdf"
+                                ? `Download ${resource.title}`
+                                : `Visit ${resource.title}`
+                            }
+                          >
+                            {resource.type === "pdf" ? (
+                              <>
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </>
+                            ) : (
+                              <>
+                                <ExternalLink className="h-4 w-4 mr-2" />
+                                Visit
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={(e) => { e.preventDefault(); toggleSaved("resources", resource.id); }}
+                            aria-label={isSaved("resources", resource.id) ? `Unsave ${resource.title}` : `Save ${resource.title}`}
+                          >
+                            <Bookmark className={`h-4 w-4 ${isSaved("resources", resource.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                          </Button>
                         </div>
                       </div>
                     </CardContent>

@@ -1,5 +1,6 @@
-// Dashboard.tsx
+// src/components/admin/Dashboard.tsx
 import { useState, useEffect, useCallback, useMemo } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { Link } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -28,16 +29,41 @@ import {
 import { toast } from "sonner";
 import { z } from "zod";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import type { DashAlert, DashActivity, DashboardStats, AlertPriority, AlertStatus, Story } from "@/lib/types";
+import type {
+  DashAlert,
+  DashActivity,
+  DashboardStats,
+  AlertPriority,
+  AlertStatus,
+  Story,
+} from "@/lib/types";
 import { IncidentType } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
-import AdminHeader from "@/components/admin/AdminHeader"; // adjust path if needed
+import AdminHeader from "@/components/admin/AdminHeader";
 
+/** DB-aligned unions */
+type ReportPriority = "Low" | "Medium" | "High" | "Critical";
+type ReportStatus = "Open" | "In Progress" | "Resolved";
+type IncidentTypeDb = "harassment" | "violence" | "discrimination" | "other";
+
+/** DB rows */
+type ReportRow = {
+  id: string;
+  title: string | null;
+  description: string | null;
+  type: IncidentTypeDb | null;
+  priority: ReportPriority | null;
+  status: ReportStatus | null;
+  location: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+/** UI */
 const searchSchema = z.object({
-  searchTerm: z.string().max(100, "Search term must be less than 100 characters"),
+  searchTerm: z.string().max(100),
 });
 
-// Lightweight local stat card for consistent, modern styling
 type StatCardProps = {
   title: string;
   value: number;
@@ -47,15 +73,7 @@ type StatCardProps = {
   color: string;
 };
 
-const StatCard = ({
-  title,
-  value,
-  description,
-  icon: IconComponent,
-  bgColor,
-  color,
-}: StatCardProps) => (
-
+const StatCard = ({ title, value, description, icon: Icon, bgColor, color }: StatCardProps) => (
   <Card className="group relative overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/40 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
     <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-primary/10 blur-2xl transition group-hover:bg-primary/20" />
     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -63,20 +81,20 @@ const StatCard = ({
         {title}
       </CardTitle>
       <div className={`h-9 w-9 rounded-full ${bgColor} flex items-center justify-center ring-1 ring-border/40`}>
-        <IconComponent className={`h-4 w-4 ${color}`} aria-hidden="true" />
+        <Icon className={`h-4 w-4 ${color}`} aria-hidden />
       </div>
     </CardHeader>
     <CardContent>
-      <div className="text-3xl font-semibold tracking-tight text-foreground">
-        {value}
-      </div>
+      <div className="text-3xl font-semibold tracking-tight text-foreground">{value}</div>
       <p className="mt-1 text-xs text-muted-foreground">{description}</p>
     </CardContent>
   </Card>
 );
 
-const Dashboard = () => {
-  const { loading: sessionLoading } = useAdminSession();
+const itemsPerPage = 10;
+
+export default function Dashboard() {
+  const { profile, loading: sessionLoading, isSignedIn } = useAdminSession();
 
   const [stats, setStats] = useState<DashboardStats>({
     totalReports: 0,
@@ -96,13 +114,10 @@ const Dashboard = () => {
   const [priorityFilter, setPriorityFilter] = useState<AlertPriority | "all">("all");
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [lastId, setLastId] = useState<string | null>(null);
   const [totalAlerts, setTotalAlerts] = useState<number>(0);
-  const itemsPerPage = 10;
-
-  // Route is guarded globally; no per-page gate needed
 
   const fetchData = useCallback(async () => {
+    if (!profile?.id) return;
     try {
       setLoading(true);
 
@@ -114,7 +129,7 @@ const Dashboard = () => {
         storiesRes,
         membersRes,
         commentsRes,
-        adminListRes,
+        adminsRes,
         alertsCountRes,
       ] = await Promise.all([
         supabase.from("reports").select("*", { count: "exact", head: true }),
@@ -124,13 +139,12 @@ const Dashboard = () => {
         supabase.from("stories").select("*", { count: "exact", head: true }),
         supabase.from("community_members").select("*", { count: "exact", head: true }),
         supabase.from("comments").select("*", { count: "exact", head: true }),
-        // ここを RPC に変更
         supabase.rpc("admin_list", {
           p_search: null,
           p_status: null,
           p_role: null,
           p_from: 0,
-          p_to: 0,     // 1件だけ返す。total_count を読む
+          p_to: 0,
         }),
         supabase
           .from("reports")
@@ -139,8 +153,7 @@ const Dashboard = () => {
           .in("priority", ["High", "Critical"]),
       ]);
 
-      // エラー確認
-      const errors = [
+      const errs = [
         reportsRes.error,
         inProgRes.error,
         criticalRes.error,
@@ -148,15 +161,15 @@ const Dashboard = () => {
         storiesRes.error,
         membersRes.error,
         commentsRes.error,
-        adminListRes.error,
+        adminsRes.error,
         alertsCountRes.error,
       ].filter(Boolean);
-      if (errors.length) throw errors[0];
+      if (errs.length) throw errs[0];
 
-      // 管理者数は RPC の total_count から取得
+      type AdminListRow = { total_count: number };
       const totalAdmins =
-        Array.isArray(adminListRes.data) && adminListRes.data.length > 0
-          ? Number(adminListRes.data[0].total_count)
+        Array.isArray(adminsRes.data) && adminsRes.data.length > 0
+          ? Number((adminsRes.data as unknown as AdminListRow[])[0].total_count)
           : 0;
 
       setStats({
@@ -172,8 +185,7 @@ const Dashboard = () => {
 
       setTotalAlerts(alertsCountRes.count || 0);
 
-      // 以下は既存のアラート読み込み処理（そのまま）
-      let alertsQuery = supabase
+      const { data: fetchedAlerts, error: alertsError } = await supabase
         .from("reports")
         .select("id,title,description,type,priority,status,location,created_at")
         .in("status", ["Open", "In Progress"])
@@ -181,24 +193,27 @@ const Dashboard = () => {
         .order("created_at", { ascending: false })
         .range((page - 1) * itemsPerPage, page * itemsPerPage - 1);
 
-      if (page > 1 && lastId) alertsQuery = alertsQuery.lt("id", lastId);
-
-      const { data: fetchedAlerts, error: alertsError } = await alertsQuery;
       if (alertsError) throw alertsError;
 
-      const alertsData = (fetchedAlerts || []).map((alert) => ({
-        id: alert.id,
-        title: alert.title || "Untitled",
-        message: alert.description || "",
-        type: alert.type || IncidentType.Other,
-        priority: alert.priority || "Medium",
-        status: alert.status || "Open",
-        location: alert.location || "Unknown",
-        timestamp: alert.created_at || new Date().toISOString(),
-        reportId: alert.id,
-      })) as DashAlert[];
+      const alertsData: DashAlert[] = (fetchedAlerts ?? []).map((a) => ({
+        id: a.id,
+        title: a.title ?? "Untitled",
+        message: a.description ?? "",
+        type:
+          a.type === "harassment"
+            ? IncidentType.Harassment
+            : a.type === "violence"
+              ? IncidentType.Violence
+              : a.type === "discrimination"
+                ? IncidentType.Discrimination
+                : IncidentType.Other,
+        priority: (a.priority as AlertPriority) ?? "Medium",
+        status: (a.status as AlertStatus) ?? "Open",
+        location: a.location ?? "Unknown",
+        timestamp: a.created_at ?? new Date().toISOString(),
+        reportId: a.id,
+      }));
       setAlerts(alertsData);
-      setLastId(fetchedAlerts?.[fetchedAlerts.length - 1]?.id || null);
 
       const { data: activityData, error: activityError } = await supabase
         .from("recent_activity")
@@ -207,139 +222,141 @@ const Dashboard = () => {
         .limit(5);
       if (activityError) throw activityError;
 
-      const recentActivityData = (activityData || []).map((a) => ({
-        id: a.id,
-        message: a.message || "",
-        type: a.type || "report",
-        status: a.status || "unknown",
-        time: a.created_at || new Date().toISOString(),
-      })) as DashActivity[];
-      setRecentActivity(recentActivityData);
+      setRecentActivity(
+        (activityData ?? []).map((a) => ({
+          id: a.id,
+          message: a.message ?? "",
+          type: a.type ?? "report",
+          status: a.status ?? "unknown",
+          time: a.created_at ?? new Date().toISOString(),
+        }))
+      );
     } catch (e) {
       console.error(e);
       toast.error("Failed to load dashboard data.");
     } finally {
       setLoading(false);
     }
-  }, [page, lastId]);
+  }, [page, profile?.id]);
 
   useEffect(() => {
-    if (!sessionLoading) fetchData();
+    if (!sessionLoading && isSignedIn) {
+      fetchData();
+    }
+  }, [sessionLoading, isSignedIn, fetchData]);
 
-    const subs = [
-      supabase
-        .channel("reports-changes")
-        .on("postgres_changes", { event: "*", schema: "public", table: "reports" }, (payload) => {
-          // Map report row -> DashAlert, aligning with reports schema (created_at)
-          const r = payload.new as Partial<{
-            id: string;
-            title: string;
-            description: string;
-            type: string;
-            priority: string;
-            status: string;
-            location: string;
-            created_at: string;
-          }>;
+  useEffect(() => {
+    if (!isSignedIn) return;
 
-          const newAlert: DashAlert = {
-            id: r?.id as string,
-            title: r?.title || "Untitled",
-            message: r?.description || "",
-            type: (r?.type as IncidentType) || IncidentType.Other,
-            priority: (r?.priority as AlertPriority) || "Medium",
-            status: (r?.status as AlertStatus) || "Open",
-            location: r?.location || "Unknown",
-            // Use created_at from reports table, not a non-existent 'timestamp' column
-            timestamp: r?.created_at || new Date().toISOString(),
-            reportId: r?.id as string,
-          };
+    const reportsCh: RealtimeChannel = supabase
+      .channel("reports-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "reports" }, (payload) => {
+        const r = payload.new as Partial<ReportRow> | null;
+        if (!r) return;
 
-          if (payload.eventType === "INSERT" && ["High", "Critical"].includes(newAlert.priority)) {
-            setAlerts((prev) =>
-              [...prev, newAlert]
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .slice(0, itemsPerPage)
-            );
-            setRecentActivity((prev) => [
-              {
-                id: newAlert.id,
-                message: `New ${newAlert.type} report: ${newAlert.title}`,
-                type: "report",
-                status: newAlert.status,
-                time: newAlert.timestamp,
-              },
-              ...prev.slice(0, 4),
-            ]);
-            setStats((prev) => ({
-              ...prev,
-              totalReports: prev.totalReports + 1,
-              criticalReports: ["High", "Critical"].includes(newAlert.priority)
-                ? prev.criticalReports + 1
-                : prev.criticalReports,
-            }));
-          } else if (payload.eventType === "UPDATE") {
-            setAlerts((prev) =>
-              prev.map((a) =>
-                a.id === newAlert.id
-                  ? {
-                    ...a,
-                    status: newAlert.status,
-                    priority: newAlert.priority,
-                    title: newAlert.title,
-                    message: newAlert.message,
-                    location: newAlert.location,
-                    timestamp: newAlert.timestamp,
-                    type: newAlert.type,
-                  }
-                  : a
-              )
-            );
-          } else if (payload.eventType === "DELETE") {
-            setAlerts((prev) => prev.filter((a) => a.id !== newAlert.id));
-          }
-        })
-        .subscribe(),
+        const newAlert: DashAlert = {
+          id: r.id as string,
+          title: r.title ?? "Untitled",
+          message: r.description ?? "",
+          type:
+            r.type === "harassment"
+              ? IncidentType.Harassment
+              : r.type === "violence"
+                ? IncidentType.Violence
+                : r.type === "discrimination"
+                  ? IncidentType.Discrimination
+                  : IncidentType.Other,
+          priority: (r.priority as AlertPriority) ?? "Medium",
+          status: (r.status as AlertStatus) ?? "Open",
+          location: r.location ?? "Unknown",
+          timestamp: r.created_at ?? new Date().toISOString(),
+          reportId: r.id as string,
+        };
 
-      supabase
-        .channel("stories-changes")
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "stories" }, (payload) => {
-          const data = payload.new as Story;
+        if (payload.eventType === "INSERT" && ["High", "Critical"].includes(String(newAlert.priority))) {
+          setAlerts((prev) => [newAlert, ...prev].slice(0, itemsPerPage));
           setRecentActivity((prev) => [
             {
-              id: data.id,
-              message: `New story: ${data.title}`,
-              type: "story",
-              status: "published",
-              time: data.created_at || new Date().toISOString(),
+              id: newAlert.id,
+              message: `New ${newAlert.type} report: ${newAlert.title}`,
+              type: "report",
+              status: newAlert.status,
+              time: newAlert.timestamp,
             },
             ...prev.slice(0, 4),
           ]);
-          setStats((prev) => ({ ...prev, totalStories: prev.totalStories + 1 }));
-        })
-        .subscribe(),
+          setStats((prev) => ({
+            ...prev,
+            totalReports: prev.totalReports + 1,
+            criticalReports: prev.criticalReports + 1,
+          }));
+        } else if (payload.eventType === "UPDATE") {
+          setAlerts((prev) =>
+            prev.map((a) =>
+              a.id === newAlert.id
+                ? {
+                  ...a,
+                  status: newAlert.status,
+                  priority: newAlert.priority,
+                  title: newAlert.title,
+                  message: newAlert.message,
+                  location: newAlert.location,
+                  timestamp: newAlert.timestamp,
+                  type: newAlert.type,
+                }
+                : a
+            )
+          );
+        } else if (payload.eventType === "DELETE") {
+          const deleted = payload.old as Partial<ReportRow> | null;
+          if (!deleted?.id) return;
+          setAlerts((prev) => prev.filter((a) => a.id !== deleted.id));
+        }
+      })
+      .subscribe();
 
-      supabase
-        .channel("comments-changes")
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments" }, (payload) => {
-          const d = payload.new as { id: string; created_at?: string };
-          setRecentActivity((prev) => [
-            {
-              id: d.id,
-              message: "New comment on story",
-              type: "comment",
-              status: "posted",
-              time: d.created_at || new Date().toISOString(),
-            },
-            ...prev.slice(0, 4),
-          ]);
-          setStats((prev) => ({ ...prev, totalComments: prev.totalComments + 1 }));
-        })
-        .subscribe(),
-    ];
+    const storiesCh: RealtimeChannel = supabase
+      .channel("stories-changes")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "stories" }, (payload) => {
+        const data = payload.new as Story;
+        setRecentActivity((prev) => [
+          {
+            id: data.id,
+            message: `New story: ${data.title ?? "Untitled"}`,
+            type: "story",
+            status: "published",
+            time: data.created_at || new Date().toISOString(),
+          },
+          ...prev.slice(0, 4),
+        ]);
+        setStats((prev) => ({ ...prev, totalStories: prev.totalStories + 1 }));
+      })
+      .subscribe();
 
-    return () => subs.forEach((s) => supabase.removeChannel(s));
-  }, [sessionLoading, fetchData]);
+    const commentsCh: RealtimeChannel = supabase
+      .channel("comments-changes")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments" }, (payload) => {
+        const d = payload.new as { id: string; created_at?: string };
+        setRecentActivity((prev) => [
+          {
+            id: d.id,
+            message: "New comment on story",
+            type: "comment",
+            status: "posted",
+            time: d.created_at || new Date().toISOString(),
+          },
+          ...prev.slice(0, 4),
+        ]);
+        setStats((prev) => ({ ...prev, totalComments: prev.totalComments + 1 }));
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(reportsCh);
+      supabase.removeChannel(storiesCh);
+      supabase.removeChannel(commentsCh);
+    };
+  }, [isSignedIn]);
 
   const handleDismissAlert = async (id: string) => {
     try {
@@ -367,7 +384,7 @@ const Dashboard = () => {
       setStats((prev) => ({
         ...prev,
         resolvedReports: prev.resolvedReports + 1,
-        inProgressReports: prev.inProgressReports - (prev.inProgressReports > 0 ? 1 : 0),
+        inProgressReports: Math.max(0, prev.inProgressReports - 1),
       }));
       toast.success("Alert resolved.");
     } catch (e) {
@@ -444,7 +461,7 @@ const Dashboard = () => {
     }
   };
 
-  if (loading) {
+  if (sessionLoading || loading) {
     return (
       <SidebarProvider>
         <AppSidebar />
@@ -466,18 +483,18 @@ const Dashboard = () => {
                 .map((_, i) => (
                   <Card key={i} className="animate-pulse">
                     <CardHeader>
-                      <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                      <div className="h-4 bg-gray-200 rounded w-3/4" />
                     </CardHeader>
                     <CardContent>
-                      <div className="h-8 bg-gray-200 rounded w-1/2"></div>
-                      <div className="h-3 bg-gray-200 rounded w-1/4 mt-2"></div>
+                      <div className="h-8 bg-gray-200 rounded w-1/2" />
+                      <div className="h-3 bg-gray-200 rounded w-1/4 mt-2" />
                     </CardContent>
                   </Card>
                 ))}
             </div>
             <CardContent>
-              <div className="h-8 bg-gray-200 rounded w-1/2"></div>
-              <div className="h-3 bg-gray-200 rounded w-1/4 mt-2"></div>
+              <div className="h-8 bg-gray-200 rounded w-1/2" />
+              <div className="h-3 bg-gray-200 rounded w-1/4 mt-2" />
             </CardContent>
           </div>
         </SidebarInset>
@@ -503,62 +520,28 @@ const Dashboard = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 p-4">
           {(() => {
-            const pluralize = (count: number, singular: string, plural: string) =>
-              count >= 0 && count <= 1 ? singular : plural;
-
+            const plural = (n: number, s: string, p: string) => (n === 1 ? s : p);
             const open = stats.totalReports;
-            const openTitle = pluralize(open, "Open Case", "Open Cases");
-            const openDesc = open === 0 ? "No open cases" : open === 1 ? "1 open case" : `${open} open cases`;
-
             const inProg = stats.inProgressReports;
-            const inProgTitle = pluralize(inProg, "In-progress Report", "In-progress Reports");
-            const inProgDesc = inProg === 0 ? "No reports under review" : inProg === 1 ? "1 report under review" : `${inProg} reports under review`;
-
             const critical = stats.criticalReports;
-            const criticalTitle = pluralize(critical, "Critical Incident", "Critical Incidents");
-            const criticalDesc = critical === 0 ? "No high-priority incidents" : critical === 1 ? "1 high-priority incident" : `${critical} high-priority incidents`;
-
             const resolved = stats.resolvedReports;
-            const resolvedTitle = pluralize(resolved, "Resolved Case", "Resolved Cases");
-            const resolvedDesc = resolved === 0 ? "No closed cases" : resolved === 1 ? "1 closed case" : `${resolved} closed cases`;
-
             const stories = stats.totalStories;
-            const storyTitle = pluralize(stories, "Story", "Stories");
-            const storyDesc = stories === 0 ? "No published stories" : stories === 1 ? "1 published story" : `${stories} published stories`;
-
             const members = stats.totalMembers;
-            const memberTitle = pluralize(members, "Member", "Members");
-            const memberDesc = members === 0 ? "No community members" : members === 1 ? "1 community member" : `${members} community members`;
-
             const comments = stats.totalComments;
-            const commentTitle = pluralize(comments, "Comment", "Comments");
-            const commentDesc = comments === 0 ? "No user comments" : comments === 1 ? "1 user comment" : `${comments} user comments`;
-
             const admins = stats.totalAdmins;
-            const adminTitle = pluralize(admins, "Admin", "Admins");
-            const adminDescription = admins === 0 ? "No administrator yet — add one" : admins === 1 ? "1 administrator" : `${admins} administrators`;
 
-            const statsArray = [
-              { title: openTitle, value: open, description: openDesc, icon: AlertTriangle, bgColor: "bg-red-100", color: "text-red-600" },
-              { title: inProgTitle, value: inProg, description: inProgDesc, icon: MessageSquare, bgColor: "bg-blue-100", color: "text-blue-600" },
-              { title: criticalTitle, value: critical, description: criticalDesc, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
-              { title: resolvedTitle, value: resolved, description: resolvedDesc, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
-              { title: storyTitle, value: stories, description: storyDesc, icon: BookOpen, bgColor: "bg-purple-100", color: "text-purple-600" },
-              { title: memberTitle, value: members, description: memberDesc, icon: Users, bgColor: "bg-teal-100", color: "text-teal-600" },
-              { title: commentTitle, value: comments, description: commentDesc, icon: MessageSquare, bgColor: "bg-indigo-100", color: "text-indigo-600" },
-              { title: adminTitle, value: admins, description: adminDescription, icon: Shield, bgColor: "bg-sky-100", color: "text-sky-600" },
+            return [
+              { title: plural(open, "Open Case", "Open Cases"), value: open, description: open === 0 ? "No open cases" : `${open} open cases`, icon: AlertTriangle, bgColor: "bg-red-100", color: "text-red-600" },
+              { title: plural(inProg, "In-progress Report", "In-progress Reports"), value: inProg, description: inProg === 0 ? "No reports under review" : `${inProg} reports under review`, icon: MessageSquare, bgColor: "bg-blue-100", color: "text-blue-600" },
+              { title: plural(critical, "Critical Incident", "Critical Incidents"), value: critical, description: critical === 0 ? "No high-priority incidents" : `${critical} high-priority incidents`, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
+              { title: plural(resolved, "Resolved Case", "Resolved Cases"), value: resolved, description: resolved === 0 ? "No closed cases" : `${resolved} closed cases`, icon: CheckCircle, bgColor: "bg-green-100", color: "text-green-600" },
+              { title: plural(stories, "Story", "Stories"), value: stories, description: stories === 0 ? "No published stories" : `${stories} published stories`, icon: BookOpen, bgColor: "bg-purple-100", color: "text-purple-600" },
+              { title: plural(members, "Member", "Members"), value: members, description: members === 0 ? "No community members" : `${members} community members`, icon: Users, bgColor: "bg-teal-100", color: "text-teal-600" },
+              { title: plural(comments, "Comment", "Comments"), value: comments, description: comments === 0 ? "No user comments" : `${comments} user comments`, icon: MessageSquare, bgColor: "bg-indigo-100", color: "text-indigo-600" },
+              { title: plural(admins, "Admin", "Admins"), value: admins, description: admins === 0 ? "No administrator yet, add one" : `${admins} administrators`, icon: Shield, bgColor: "bg-sky-100", color: "text-sky-600" },
             ];
-            return statsArray;
-          })().map((stat) => (
-            <StatCard
-              key={stat.title}
-              title={stat.title}
-              value={stat.value}
-              description={stat.description}
-              icon={stat.icon}
-              bgColor={stat.bgColor}
-              color={stat.color}
-            />
+          })().map((s) => (
+            <StatCard key={s.title} {...s} />
           ))}
         </div>
 
@@ -570,24 +553,22 @@ const Dashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {recentActivity.map((activity) => {
-                  const IconComponent = getActivityIcon(activity.type);
+                {recentActivity.map((a) => {
+                  const Icon = getActivityIcon(a.type);
                   return (
-                    <div key={activity.id} className="flex items-center space-x-4 p-3 rounded-lg bg-muted/30">
+                    <div key={a.id} className="flex items-center space-x-4 p-3 rounded-lg bg-muted/30">
                       <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
-                        <IconComponent className="h-4 w-4 text-primary" aria-hidden="true" />
+                        <Icon className="h-4 w-4 text-primary" aria-hidden />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground">{activity.message}</p>
-                        <p className="text-xs text-muted-foreground">{formatDistanceToNow(parseISO(activity.time), { addSuffix: true })}</p>
+                        <p className="text-sm font-medium text-foreground">{a.message}</p>
+                        <p className="text-xs text-muted-foreground">{formatDistanceToNow(parseISO(a.time), { addSuffix: true })}</p>
                       </div>
-                      <Badge variant="secondary" className="text-xs">{activity.status}</Badge>
+                      <Badge variant="secondary" className="text-xs">{a.status}</Badge>
                     </div>
                   );
                 })}
-                {recentActivity.length === 0 && (
-                  <p className="text-center text-muted-foreground">No recent activity</p>
-                )}
+                {recentActivity.length === 0 && <p className="text-center text-muted-foreground">No recent activity</p>}
               </div>
             </CardContent>
           </Card>
@@ -601,7 +582,7 @@ const Dashboard = () => {
             </CardHeader>
             <CardContent>
               <div className="flex items-start space-x-3">
-                <CheckCircle className="h-6 w-6 text-emerald-600 mt-1" aria-hidden="true" />
+                <CheckCircle className="h-6 w-6 text-emerald-600 mt-1" aria-hidden />
                 <div className="flex-1">
                   <h3 className="font-medium text-emerald-800 mb-1">All Systems Operational</h3>
                   <p className="text-sm text-emerald-700">Emergency services and response teams are fully operational and available 24/7.</p>
@@ -630,7 +611,7 @@ const Dashboard = () => {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
-                <SearchIcon className="h-5 w-5" aria-hidden="true" />
+                <SearchIcon className="h-5 w-5" aria-hidden />
                 <span>Search & Filter</span>
               </CardTitle>
             </CardHeader>
@@ -682,30 +663,22 @@ const Dashboard = () => {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
-                <Bell className="h-5 w-5" aria-hidden="true" />
+                <Bell className="h-5 w-5" aria-hidden />
                 <span>Active Alerts ({filteredAlerts.length})</span>
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="" aria-label="Active alerts list">
+              <ScrollArea>
                 <div className="space-y-4">
                   {filteredAlerts.map((alert) => {
-                    const IconComponent = getAlertIcon(alert.type);
+                    const Icon = getAlertIcon(alert.type);
                     return (
-                      <Alert
-                        key={alert.id}
-                        className={`relative ${alert.priority === "High" || alert.priority === "Critical" ? "border-destructive" : ""}`}
-                      >
+                      <Alert key={alert.id} className={`relative ${alert.priority === "High" || alert.priority === "Critical" ? "border-destructive" : ""}`}>
                         <div className="flex items-start justify-between">
                           <div className="flex items-start space-x-3">
-                            <IconComponent
-                              className={`h-5 w-5 mt-0.5 ${alert.priority === "High" || alert.priority === "Critical"
-                                ? "text-destructive"
-                                : alert.priority === "Medium"
-                                  ? "text-warning"
-                                  : "text-success"
-                                }`}
-                              aria-hidden="true"
+                            <Icon
+                              className={`h-5 w-5 mt-0.5 ${alert.priority === "High" || alert.priority === "Critical" ? "text-destructive" : alert.priority === "Medium" ? "text-warning" : "text-success"}`}
+                              aria-hidden
                             />
                             <div className="flex-1 space-y-2">
                               <div className="flex items-center space-x-2">
@@ -716,11 +689,11 @@ const Dashboard = () => {
                               <AlertDescription className="text-sm text-muted-foreground">{alert.message}</AlertDescription>
                               <div className="flex items-center space-x-4 text-xs text-muted-foreground">
                                 <div className="flex items-center space-x-1">
-                                  <MapPin className="h-3 w-3" aria-hidden="true" />
+                                  <MapPin className="h-3 w-3" aria-hidden />
                                   <span>{alert.location}</span>
                                 </div>
                                 <div className="flex items-center space-x-1">
-                                  <Clock className="h-3 w-3" aria-hidden="true" />
+                                  <Clock className="h-3 w-3" aria-hidden />
                                   <span>{formatDistanceToNow(parseISO(alert.timestamp), { addSuffix: true })}</span>
                                 </div>
                                 <div className="flex items-center space-x-1">
@@ -734,12 +707,12 @@ const Dashboard = () => {
                           <div className="flex items-center space-x-2">
                             {alert.status !== "Resolved" && (
                               <Button variant="outline" size="sm" onClick={() => handleMarkResolved(alert.id)} aria-label={`Mark ${alert.title} as resolved`}>
-                                <CheckCircle className="h-4 w-4 mr-1" aria-hidden="true" />
+                                <CheckCircle className="h-4 w-4 mr-1" aria-hidden />
                                 Resolve
                               </Button>
                             )}
                             <Button variant="ghost" size="sm" onClick={() => handleDismissAlert(alert.id)} aria-label={`Dismiss ${alert.title}`}>
-                              <XCircle className="h-4 w-4" aria-hidden="true" />
+                              <XCircle className="h-4 w-4" aria-hidden />
                             </Button>
                           </div>
                         </div>
@@ -771,6 +744,4 @@ const Dashboard = () => {
       </SidebarInset>
     </SidebarProvider>
   );
-};
-
-export default Dashboard;
+}

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import supabase from "@/server/supabase";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -16,8 +15,8 @@ import type { PostgrestError } from "@supabase/supabase-js";
 type UiStory = {
   id: string;
   title: string;
-  content: string;          // preview text
-  full_content: string;     // full text
+  content: string;
+  full_content: string;
   author: {
     id: string | null;
     name: string;
@@ -33,6 +32,8 @@ type UiStory = {
   views: number;
   tags: string[];
   featured: boolean;
+  /** NEW: db-backed saved-state */
+  is_saved?: boolean;
 };
 
 type DbStory = {
@@ -47,7 +48,6 @@ type DbStory = {
 type StoryCardProps =
   | { story: UiStory; storyId?: never }
   | { story?: never; storyId: string };
-
 
 const CATEGORIES = ["healing", "escape", "support", "recovery", "awareness"] as const;
 
@@ -65,11 +65,13 @@ function toPreview(full: string, len = 200) {
 export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
   const [story, setStory] = useState<UiStory | null>(propStory ?? null);
   const [loading, setLoading] = useState(!propStory && !!storyId);
-  const [error, setError] = useState<string | null>(null);
+  const [error] = useState<string | null>(null);
   const [likeLoading, setLikeLoading] = useState<string | null>(null);
+  const [saveLoading, setSaveLoading] = useState<string | null>(null);
   const navigate = useNavigate();
-  const { isSaved: isSavedFn, toggle: toggleSaved } = useSavedItems();
+  const { toggle: toggleSavedLocal } = useSavedItems();
 
+  // ── Load story + counts + my like/save
   useEffect(() => {
     if (propStory || !storyId) return;
 
@@ -77,7 +79,6 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
       try {
         setLoading(true);
 
-        // base story
         const { data: row, error: dbError } = await supabase
           .from("stories")
           .select("id,title,content,author_id,created_at,tags")
@@ -87,18 +88,6 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         if (!row) throw new Error("Story not found.");
 
         // author profile
-
-        const { data: auth } = await supabase.auth.getUser();
-        let canReadProfiles = false;
-        if (auth.user) {
-          const { data: am } = await supabase
-            .from("admin_members")
-            .select("user_id")
-            .eq("user_id", auth.user.id)
-            .maybeSingle();
-          canReadProfiles = !!am;
-        }
-        
         let author = {
           id: row.author_id,
           name: "Anonymous",
@@ -106,51 +95,41 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
           avatar: null as string | null,
           verified: false,
         };
-        if (row.author_id && (canReadProfiles || auth.user?.id === row.author_id)) {
-          const { data: profiles } = await supabase
+        if (row.author_id) {
+          const { data: profile } = await supabase
             .from("community_members")
             .select("user_id,name,avatar_url,verified")
             .eq("user_id", row.author_id)
             .maybeSingle<{ user_id: string; name: string; avatar_url: string | null; verified: boolean }>();
-          if (profiles) {
+          if (profile) {
             author = {
               id: row.author_id,
-              name: profiles.name || "User",
+              name: profile.name || "Anonymous",
               anonymous: false,
-              avatar: profiles.avatar_url,
-              verified: !!profiles.verified,
+              avatar: profile.avatar_url,
+              verified: !!profile.verified,
             };
           }
         }
 
-        // like count (with fallback)
-        const { data: likeCount } = await supabase
-          .from("story_like_counts")
-          .select("story_id,likes")
-          .eq("story_id", row.id)
-          .maybeSingle<{ story_id: string; likes: number }>();
-        let likesValue = likeCount?.likes ?? null;
-        if (likesValue == null) {
-          const { count: likesC } = await supabase
-            .from("story_likes")
-            .select("story_id", { count: "exact", head: true })
-            .eq("story_id", row.id);
-          likesValue = likesC ?? 0;
-        }
+        // aggregates
+        const [{ data: likeCount }, { data: viewCount }] = await Promise.all([
+          supabase.from("story_like_counts").select("likes").eq("story_id", row.id).maybeSingle(),
+          supabase.from("story_view_counts").select("views").eq("story_id", row.id).maybeSingle(),
+        ]);
 
-        // view count (with fallback)
-        const { data: viewCount } = await supabase
-          .from("story_view_counts")
-          .select("story_id,views")
-          .eq("story_id", row.id)
-          .maybeSingle<{ story_id: string; views: number }>();
-        let viewsValue = viewCount?.views ?? null;
-        if (viewsValue == null) {
-          const { count: viewsC } = await supabase
-            .from("story_views")
-            .select("story_id", { count: "exact", head: true })
-            .eq("story_id", row.id);
-          viewsValue = viewsC ?? 0;
+        // my like/save
+        const { data: { user } } = await supabase.auth.getUser();
+        let isLiked = false;
+        let isSaved = false;
+
+        if (user) {
+          const [mineLike, mineSave] = await Promise.all([
+            supabase.from("story_likes").select("story_id").eq("story_id", row.id).eq("user_id", user.id).maybeSingle(),
+            supabase.from("story_saves").select("story_id").eq("story_id", row.id).eq("user_id", user.id).maybeSingle(), // NEW
+          ]);
+          isLiked = !!mineLike.data;
+          isSaved = !!mineSave.data;
         }
 
         // comments count
@@ -159,20 +138,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
           .select("id", { count: "exact", head: true })
           .eq("story_id", row.id);
 
-        // current user like
-        const { data: { user } } = await supabase.auth.getUser();
-        let isLiked = false;
-        if (user) {
-          const { data: mine } = await supabase
-            .from("story_likes")
-            .select("story_id")
-            .eq("story_id", row.id)
-            .eq("user_id", user.id)
-            .maybeSingle();
-          isLiked = !!mine;
-        }
-
-        const mapped: UiStory = {
+        setStory({
           id: row.id,
           title: row.title ?? "",
           content: toPreview(row.content ?? ""),
@@ -180,19 +146,32 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
           author,
           created_at: row.created_at ?? new Date().toISOString(),
           category: getCategoryFromTags(row.tags),
-          likes: likesValue ?? 0,
+          likes: likeCount?.likes ?? 0,
           is_liked: isLiked,
           comments_count: commentsCount ?? 0,
-          views: viewsValue ?? 0,
+          views: viewCount?.views ?? 0,
           tags: Array.isArray(row.tags) ? row.tags : [],
           featured: false,
-        };
+          is_saved: isSaved, // NEW
+        });
 
-        setStory(mapped);
-      } catch (err) {
-        console.error("Error fetching story:", err);
-        setError("Failed to load story.");
+        // record unique view for signed-in non-author (author view doesn't count)
+        if (user && user.id !== row.author_id) {
+          // insert once; rely on PK (story_id,user_id)
+          try {
+            await supabase
+              .from("story_views")
+              .insert({ story_id: row.id }); // user_id defaults to auth.uid()
+            setStory(s => (s ? { ...s, views: s.views + 1 } : s));
+          } catch (e) {
+            console.error("Failed to record story view:", e);
+            toast.error("Failed to record story view. Please try again.");
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load story:", e);
         toast.error("Failed to load story. Please try again.");
+        setLoading(false);
       } finally {
         setLoading(false);
       }
@@ -201,32 +180,28 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
     fetchStory();
   }, [propStory, storyId]);
 
-  // Realtime updates for likes/views and current user's like status
+  // ── Realtime aggregation + my like state updates
   useEffect(() => {
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let likeChannel: ReturnType<typeof supabase.channel> | null = null;
     let isMounted = true;
 
     const sub = async () => {
-      const id = (story?.id ?? storyId) as string | undefined;
+      const id = story?.id ?? storyId;
       if (!id) return;
 
       channel = supabase
         .channel(`story-agg-${id}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'story_like_counts', filter: `story_id=eq.${id}` },
-          (payload: { new?: { likes?: number; count?: number }; old?: unknown }) => {
-            const likes = (payload.new?.likes ?? payload.new?.count ?? null) as number | null;
-            if (likes != null && isMounted) setStory((s) => (s ? { ...s, likes } : s));
+        .on("postgres_changes", { event: "*", schema: "public", table: "story_view_counts", filter: `story_id=eq.${id}` },
+          (payload: { new?: { views?: number; count?: number } }) => {
+            const views = payload?.new?.views ?? payload?.new?.count;
+            if (typeof views === "number" && isMounted) setStory(s => (s ? { ...s, views } : s));
           }
         )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'story_view_counts', filter: `story_id=eq.${id}` },
-          (payload: { new?: { views?: number; count?: number }; old?: unknown }) => {
-            const views = (payload.new?.views ?? payload.new?.count ?? null) as number | null;
-            if (views != null && isMounted) setStory((s) => (s ? { ...s, views } : s));
+        .on("postgres_changes", { event: "*", schema: "public", table: "story_like_counts", filter: `story_id=eq.${id}` },
+          (payload: { new?: { likes?: number; count?: number } }) => {
+            const likes = payload?.new?.likes ?? payload?.new?.count;
+            if (typeof likes === "number" && isMounted) setStory(s => (s ? { ...s, likes } : s));
           }
         )
         .subscribe();
@@ -236,21 +211,17 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         likeChannel = supabase
           .channel(`story-like-${id}-${auth.user.id}`)
           .on(
-            'postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'story_likes', filter: `story_id=eq.${id}` },
-            (payload: { new?: { user_id?: string }; old?: { user_id?: string } }) => {
-              if (payload.new?.user_id === auth.user!.id && isMounted) {
-                setStory((s) => (s ? { ...s, is_liked: true } : s));
-              }
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "story_likes", filter: `story_id=eq.${id}` },
+            (p: { new?: { user_id?: string } }) => {
+              if (p?.new?.user_id === auth.user?.id) setStory(s => (s ? { ...s, is_liked: true } : s));
             }
           )
           .on(
-            'postgres_changes',
-            { event: 'DELETE', schema: 'public', table: 'story_likes', filter: `story_id=eq.${id}` },
-            (payload: { new?: { user_id?: string }; old?: { user_id?: string } }) => {
-              if (payload.old?.user_id === auth.user!.id && isMounted) {
-                setStory((s) => (s ? { ...s, is_liked: false } : s));
-              }
+            "postgres_changes",
+            { event: "DELETE", schema: "public", table: "story_likes", filter: `story_id=eq.${id}` },
+            (p: { old?: { user_id?: string } }) => {
+              if (p?.old?.user_id === auth.user?.id) setStory(s => (s ? { ...s, is_liked: false } : s));
             }
           )
           .subscribe();
@@ -258,20 +229,17 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
     };
 
     sub();
-    return () => {
-      isMounted = false;
-      channel?.unsubscribe();
-      likeChannel?.unsubscribe();
-    };
+    return () => { isMounted = false; channel?.unsubscribe(); likeChannel?.unsubscribe(); };
   }, [story?.id, storyId]);
 
+  // ── Like: 1 per member (unique index enforces), authors allowed
   const toggleLike = async () => {
     if (!story) return;
-    const storyId = story.id;
-    const previousLiked = story.is_liked;
-    const previousLikes = story.likes;
+    const sid = story.id;
+    const prevLiked = story.is_liked;
+    const prevLikes = story.likes;
 
-    setLikeLoading(storyId);
+    setLikeLoading(sid);
     try {
       const { data, error: userError } = await supabase.auth.getUser();
       if (userError) throw userError;
@@ -282,180 +250,196 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         return;
       }
 
-      const nextLiked = !previousLiked;
-
-      setStory((current) => {
-        if (!current || current.id !== storyId) return current;
-        const adjustedLikes = Math.max(0, current.likes + (nextLiked ? 1 : -1));
-        return { ...current, is_liked: nextLiked, likes: adjustedLikes };
-      });
+      const nextLiked = !prevLiked;
+      // optimistic
+      setStory(s => (s && s.id === sid ? { ...s, is_liked: nextLiked, likes: Math.max(0, s.likes + (nextLiked ? 1 : -1)) } : s));
 
       if (nextLiked) {
-        const { error } = await supabase
-          .from("story_likes")
-          .insert({ story_id: storyId, user_id: user.id });
-        if (error && (error as { code?: string }).code !== "23505") {
-          setStory((current) => {
-            if (!current || current.id !== storyId) return current;
-            return { ...current, is_liked: previousLiked, likes: previousLikes };
-          });
-          const errObj = error as PostgrestError;
-          const msg = errObj?.message || errObj?.hint || errObj?.details || "Like failed.";
-          toast.error("Like failed", { description: msg });
-        }
+        const { error } = await supabase.from("story_likes").insert({ story_id: sid, user_id: user.id });
+        if (error && (error as PostgrestError).code !== "23505") throw error; // 23505: unique violation -> already liked
       } else {
-        const { error } = await supabase
-          .from("story_likes")
-          .delete()
-          .eq("story_id", storyId)
-          .eq("user_id", user.id);
-        if (error) {
-          setStory((current) => {
-            if (!current || current.id !== storyId) return current;
-            return { ...current, is_liked: previousLiked, likes: previousLikes };
-          });
-          const errObj = error as PostgrestError;
-          const msg = errObj?.message || errObj?.hint || errObj?.details || "Unlike failed.";
-          toast.error("Unlike failed", { description: msg });
-        }
+        const { error } = await supabase.from("story_likes").delete().eq("story_id", sid).eq("user_id", user.id);
+        if (error) throw error;
       }
     } catch (err) {
       console.error("Failed to toggle like", err);
-      setStory((current) => {
-        if (!current || current.id !== storyId) return current;
-        return { ...current, is_liked: previousLiked, likes: previousLikes };
-      });
-      const message =
-        (typeof err === "object" && err && "message" in err && typeof err.message === "string")
-          ? err.message
-          : undefined;
-      toast.error("Unable to update like. Please try again.", {
-        description: message,
-      });
+      setStory(s => (s && s.id === sid ? { ...s, is_liked: prevLiked, likes: prevLikes } : s));
+      const msg = (err as PostgrestError)?.message || "Unable to update like.";
+      toast.error(msg);
     } finally {
       setLikeLoading(null);
     }
   };
 
+  // ── Save: 1 per member (unique index enforces)
+  const toggleSave = async () => {
+    if (!story) return;
+    const sid = story.id;
+    setSaveLoading(sid);
+    try {
+      const { data, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      const user = data?.user ?? null;
+      if (!user) {
+        toast.error("Login required.");
+        navigate("/auth/login");
+        return;
+      }
+
+      const currentlySaved = !!story.is_saved;
+
+      // optimistic UI (+ keep local hook in sync if you want)
+      setStory(s => (s && s.id === sid ? { ...s, is_saved: !currentlySaved } : s));
+      try { toggleSavedLocal("stories", sid); } catch {
+        // Ignore errors from local save toggle
+      }
+
+      if (!currentlySaved) {
+        const { error } = await supabase.from("story_saves").insert({ story_id: sid }); // user_id defaults to auth.uid()
+        if (error && (error as PostgrestError).code !== "23505") throw error; // duplicate safe
+      } else {
+        const { data: { user } } = await supabase.auth.getUser();
+        const { error } = await supabase
+          .from("story_saves")
+          .delete()
+          .eq("story_id", sid)
+          .eq("user_id", user!.id);
+        if (error) throw error;
+      }
+    } catch (err) {
+      console.error("Failed to toggle save", err);
+      setStory(s => (s && s.id === sid ? { ...s, is_saved: !s.is_saved } : s)); // revert
+      toast.error((err as PostgrestError)?.message || "Unable to update saved state.");
+    } finally {
+      setSaveLoading(null);
+    }
+  };
+
+
   if (loading) {
     return (
-      <div className="rounded-lg border p-4">
-        <div className="h-40 w-full animate-pulse rounded-md bg-muted" />
-        <div className="mt-4 h-4 w-2/3 animate-pulse rounded bg-muted" />
-        <div className="mt-2 h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <div className="rounded-xl border bg-card p-4 shadow-sm animate-pulse">
+        <div className="h-40 w-full rounded-lg bg-muted" />
+        <div className="mt-4 h-4 w-3/4 rounded bg-muted" />
+        <div className="mt-2 h-4 w-1/2 rounded bg-muted" />
       </div>
     );
   }
-
   if (error) {
     return (
-      <div className="rounded-lg border p-4 text-center text-red-600">
+      <div className="rounded-xl border bg-card p-6 text-center text-red-600 shadow-sm">
         {error}
-        <Button onClick={() => window.location.reload()} className="mt-2">
+        <Button onClick={() => window.location.reload()} className="mt-3 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
           Retry
         </Button>
       </div>
     );
   }
-
-  if (!story) {
-    toast.warning("Missing story data");
-    return null;
-  }
+  if (!story) return null;
 
   const created = formatDistanceToNow(parseISO(story.created_at), { addSuffix: true });
 
   return (
-    <div className="group overflow-hidden rounded-xl border bg-card transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5">
-      <Link
-        to={`/stories/${story.id}`}
-        className="block"
-        aria-label={`View story: ${story.title}`}
-      >
+    <div className="group relative overflow-hidden rounded-xl border bg-card shadow-sm transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+      <Link to={`/stories/${story.id}`} className="block" aria-label={`View story: ${story.title}`}>
         <div className="relative w-full overflow-hidden">
           {story.featured && (
-            <div className="absolute top-2 right-2">
-              <Badge className="bg-primary text-primary-foreground">Featured</Badge>
+            <div className="absolute top-3 right-3">
+              <Badge className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground px-2 py-1 text-xs font-semibold rounded-md shadow-sm">
+                Featured
+              </Badge>
             </div>
           )}
         </div>
-        <div className="p-4">
-          <h3 className="mb-1 line-clamp-2 text-lg font-semibold tracking-tight transition-colors group-hover:text-primary">
+        <div className="p-5">
+          <h3 className="mb-2 line-clamp-2 text-xl font-semibold tracking-tight text-foreground transition-colors duration-200 group-hover:text-primary">
             {story.title?.trim() || toPreview(story.full_content || story.content || "", 60)}
           </h3>
         </div>
       </Link>
 
-      <div className="p-4 pt-0">
-        <div className="mb-3 flex flex-col sm:flex-row sm:items-center gap-3 text-sm text-muted-foreground min-w-0">
-          <div className="flex items-center gap-3">
+      <div className="p-5 pt-0">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-3 min-w-0">
             {story.author.avatar ? (
-              <Avatar className="h-8 w-8 border border-border ring-1 ring-primary/10 shadow-sm">
+              <Avatar className="h-10 w-10 border-2 border-border ring-2 ring-primary/10 shadow-sm transition-transform duration-200 group-hover:scale-105">
                 <AvatarImage src={story.author.avatar} alt={story.author.name} />
-                <AvatarFallback className="text-[11px] font-semibold">
+                <AvatarFallback className="text-xs font-semibold bg-muted">
                   {(story.author.name || "A").slice(0, 1)}
                 </AvatarFallback>
               </Avatar>
             ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted border border-border ring-1 ring-primary/10">
-                {story.author.anonymous ? (
-                  <Shield className="h-4 w-4" />
-                ) : (
-                  <span className="text-[11px] font-semibold">
-                    {(story.author.name || "A").slice(0, 1)}
-                  </span>
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted border-2 border-border ring-2 ring-primary/10 shadow-sm transition-transform duration-200 group-hover:scale-105">
+                {story.author.anonymous ? <Shield className="h-5 w-5 text-muted-foreground" /> : (
+                  <span className="text-xs font-semibold">{(story.author.name || "A").slice(0, 1)}</span>
                 )}
               </div>
             )}
-            <span className="flex-1 truncate font-medium text-foreground">
-              {story.author.name}
-            </span>
+            <span className="flex-1 truncate font-medium text-foreground">{story.author.name}</span>
+            {story.author.verified && (
+              <Badge variant="secondary" className="ml-1 bg-blue-100 text-blue-600 px-1.5 py-0.5 text-xs">
+                Verified
+              </Badge>
+            )}
           </div>
-          <div className="flex items-center gap-1">
-            <Clock className="h-4 w-4" />
+          <div className="flex items-center gap-1.5">
+            <Clock className="h-4 w-4 text-muted-foreground" />
             <span>{created}</span>
           </div>
           <div className="sm:ml-auto shrink-0">
-            <Badge variant="outline" className="text-xs">
-              {String(story.category || "").replace("-", " ") || "general"}
+            <Badge
+              variant="outline"
+              className="text-xs font-medium border-primary/20 bg-primary/5 text-primary capitalize px-2 py-1 rounded-md"
+            >
+              {String(story.category || "").replace("-", " ") || "General"}
             </Badge>
           </div>
         </div>
-        <p className="mb-3 line-clamp-3 text-sm text-muted-foreground">
-          {story.content}
-        </p>
+
+        <p className="mb-4 line-clamp-3 text-sm text-muted-foreground leading-relaxed">{story.content}</p>
+
         {Array.isArray(story.tags) && story.tags.filter(t => !/^cat:/.test(t)).length > 0 ? (
-          <div className="mb-3 flex flex-wrap gap-1">
+          <div className="mb-4 flex flex-wrap gap-1.5">
             {story.tags
-              .filter((t) => !/^cat:/.test(t))
+              .filter(t => !/^cat:/.test(t))
               .slice(0, 4)
-              .map((tag) => (
-                <Badge key={tag} variant="secondary" className="text-xs">
+              .map(tag => (
+                <Badge
+                  key={tag}
+                  variant="secondary"
+                  className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-md hover:bg-muted/80 transition-colors duration-200"
+                >
                   #{String(tag).replace(/-/g, "")}
                 </Badge>
               ))}
             {story.tags.filter(t => !/^cat:/.test(t)).length > 4 && (
-              <Badge variant="secondary" className="text-xs">
+              <Badge
+                variant="secondary"
+                className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-md"
+              >
                 +{story.tags.filter(t => !/^cat:/.test(t)).length - 4} more
               </Badge>
             )}
           </div>
         ) : (
-          <p className="mb-3 text-xs text-muted-foreground">No tags</p>
+          <p className="mb-4 text-xs text-muted-foreground italic">No tags</p>
         )}
 
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1">
-              <Heart className={`h-4 w-4 ${story.is_liked ? "fill-red-500 text-red-500" : ""}`} />
+          <div className="flex items-center gap-4">
+            <span className="inline-flex items-center gap-1.5">
+              <Heart
+                className={`h-5 w-5 transition-colors duration-200 ${story.is_liked ? "fill-red-500 text-red-500" : "text-muted-foreground"
+                  }`}
+              />
               {story.likes}
             </span>
-            <span className="inline-flex items-center gap-1">
-              <MessageCircle className="h-4 w-4" />
+            <span className="inline-flex items-center gap-1.5">
+              <MessageCircle className="h-5 w-5 text-muted-foreground" />
               {story.comments_count}
             </span>
-            <span className="inline-flex items-center gap-1">
-              <Eye className="h-4 w-4" />
+            <span className="inline-flex items-center gap-1.5">
+              <Eye className="h-5 w-5 text-muted-foreground" />
               {story.views}
             </span>
           </div>
@@ -466,20 +450,32 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
               disabled={likeLoading === story.id}
               onClick={toggleLike}
               aria-label={story.is_liked ? `Unlike ${story.title}` : `Like ${story.title}`}
+              className="p-1.5 hover:bg-primary/10 rounded-full transition-colors duration-200"
             >
-              <ThumbsUp className={`h-4 w-4 ${story.is_liked ? "fill-blue-500 text-blue-500" : ""}`} />
+              <ThumbsUp
+                className={`h-5 w-5 ${story.is_liked ? "fill-blue-500 text-blue-500" : "text-muted-foreground"
+                  }`}
+              />
             </Button>
             <Button
               size="sm"
               variant="ghost"
-              onClick={(e) => { e.preventDefault(); try { toggleSaved("stories", story.id); } catch {} }}
-              aria-label={isSavedFn("stories", story.id) ? `Unsave ${story.title}` : `Save ${story.title}`}
+              disabled={saveLoading === story.id}
+              onClick={(e) => {
+                e.preventDefault();
+                toggleSave();
+              }}
+              aria-label={story.is_saved ? `Unsave ${story.title}` : `Save ${story.title}`}
+              className="p-1.5 hover:bg-primary/10 rounded-full transition-colors duration-200"
             >
-              <Bookmark className={`h-4 w-4 ${isSavedFn("stories", story.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+              <Bookmark
+                className={`h-5 w-5 ${story.is_saved ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"
+                  }`}
+              />
             </Button>
             <Link
               to={`/stories/${story.id}`}
-              className="text-primary underline-offset-2 hover:underline"
+              className="text-primary text-sm font-medium underline-offset-4 hover:underline transition-colors duration-200"
             >
               Read more
             </Link>
@@ -494,6 +490,7 @@ import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import Loading from "@/components/utils/Loading";
 import LiveChat from "@/components/Home/LiveChat";
+import { Card, CardContent } from "@/components/ui/card";
 
 type ListItem = { id: string };
 
@@ -674,7 +671,7 @@ export default function Stories() {
           </>
         )}
       </main>
-      <LiveChat/>
+      <LiveChat />
       <Footer />
     </div>
   );

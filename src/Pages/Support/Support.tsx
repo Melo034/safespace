@@ -1,3 +1,4 @@
+// Support.tsx — aligned with your database schema & policies
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import supabase from "@/server/supabase";
@@ -6,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import  Navbar  from "@/components/utils/Navbar";
+import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -33,6 +34,7 @@ import LiveChat from "@/components/Home/LiveChat";
 import type { SupportService } from "@/lib/types";
 import { useSavedItems } from "@/hooks/useSavedItems";
 
+/** Icons mapped to supported service types (text column in DB) */
 const typeIcons = {
   lawyer: Scale,
   therapist: Heart,
@@ -43,66 +45,70 @@ const typeIcons = {
 const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
 type ServiceType = (typeof VALID_TYPES)[number];
 
+/** Matches availability_type enum in DB: available | limited | unavailable */
 const VALID_AVAILABILITY = ["available", "limited", "unavailable"] as const;
 type AvailabilityType = (typeof VALID_AVAILABILITY)[number];
 
 function toInitials(name?: string) {
   const clean = (name || "").trim();
   if (!clean) return "?";
-  return clean
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((n) => n[0]?.toUpperCase() || "")
-    .join("") || "?";
+  return (
+    clean
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((n) => n[0]?.toUpperCase() || "")
+      .join("") || "?"
+  );
 }
 
+/** Shape of rows returned from public.support_services */
 type SupportServiceRow = {
   id: string;
-  name?: string | null;
-  type?: string | null;
-  title?: string | null;
-  specialization?: string | null;
-  description?: string | null;
-  contact_info?: {
-    address?: string | null;
-    phone?: string | null;
-    email?: string | null;
-  } | null;
-  website?: string | null;
-  avatar?: string | null;
-  rating?: number | null;
-  reviews?: number | null;
-  verified?: boolean | null;
-  availability?: string | null;
-  status?: string | null;
-  credentials?: string | null;
-  languages?: unknown;
-  tags?: unknown;
+  name: string | null;
+  type: string | null; // free-text in DB (we constrain on UI)
+  title: string | null;
+  specialization: string | null;
+  description: string | null;
+  contact_info: { address?: string | null; phone?: string | null; email?: string | null } | null; // jsonb
+  website: string | null;
+  avatar: string | null;
+  rating: number | null; // numeric 0..5
+  reviews: number | null;
+  verified: boolean | null; // public flag in DB
+  availability: string | null; // availability_type enum
+  status: string | null; // support_status enum, default 'pending'
+  credentials: string | null;
+  languages: unknown; // text[]
+  tags: unknown; // text[]
 };
 
 function mapRow(row: SupportServiceRow): SupportService {
   return {
     id: row.id,
-    name: row.name || "",
-    type: (VALID_TYPES as readonly string[]).includes(row.type as string) ? (row.type as ServiceType) : "lawyer",
-    title: row.title || "",
-    specialization: row.specialization || "",
-    description: row.description || "",
+    name: row.name ?? "",
+    type: (VALID_TYPES as readonly string[]).includes(row.type as string)
+      ? (row.type as ServiceType)
+      : "lawyer",
+    title: row.title ?? "",
+    specialization: row.specialization ?? "",
+    description: row.description ?? "",
     contact_info: {
-      address: row?.contact_info?.address || "",
-      phone: row?.contact_info?.phone || "",
-      email: row?.contact_info?.email || "",
+      address: row?.contact_info?.address ?? "",
+      phone: row?.contact_info?.phone ?? "",
+      email: row?.contact_info?.email ?? "",
     },
-    website: row.website || "",
-    avatar: row.avatar || "",
+    website: row.website ?? "",
+    avatar: row.avatar ?? "",
     rating: typeof row.rating === "number" ? row.rating : null,
-    reviews: row.reviews || 0,
+    reviews: typeof row.reviews === "number" ? row.reviews : 0,
     verified: !!row.verified,
+    // DB enum availability_type; default to "unavailable" for safety
     availability: (VALID_AVAILABILITY as readonly string[]).includes(row.availability as string)
       ? (row.availability as AvailabilityType)
       : "unavailable",
-    status: row.status || "pending",
-    credentials: row.credentials || "",
+    // DB enum support_status (pending/approved/etc). We don’t hard-filter by enum value to avoid casting errors.
+    status: row.status ?? "pending",
+    credentials: row.credentials ?? "",
     languages: Array.isArray(row.languages) ? (row.languages as string[]) : [],
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
   } as SupportService;
@@ -122,10 +128,15 @@ const Support = () => {
     const fetchSupportServices = async () => {
       try {
         setLoading(true);
+        // Public read is enabled per RLS. Filter by verified=true to match the DB flag.
+        // Avoid filtering by status enum value here to prevent enum cast errors if values differ.
         const { data, error } = await supabase
           .from("support_services")
-          .select("*")
-          .eq("status", "approved");
+          .select(
+            "id,name,type,title,specialization,description,contact_info,website,avatar,rating,reviews,verified,availability,status,credentials,languages,tags"
+          )
+          .eq("verified", true)
+          .order("updated_at", { ascending: false });
 
         if (error) throw error;
         setSupportServices((data || []).map(mapRow));
@@ -139,13 +150,13 @@ const Support = () => {
 
     fetchSupportServices();
 
+    // Realtime: keep the list in sync. We only display verified items.
     const channel = supabase
-      .channel("support-services-changes")
+      .channel("public:support_services")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "support_services" },
         (payload) => {
-          // Handle DELETE early
           if (payload.eventType === "DELETE") {
             const oldRow = payload.old as Partial<SupportServiceRow> | null;
             if (!oldRow?.id) return;
@@ -156,25 +167,21 @@ const Support = () => {
           const newRow = payload.new as SupportServiceRow | null;
           if (!newRow) return;
 
-          // Only show approved items
-          if (newRow.status !== "approved") {
+          // Only keep verified rows in UI
+          if (!newRow.verified) {
             setSupportServices((prev) => prev.filter((item) => item.id !== newRow.id));
             return;
           }
 
           const mapped = mapRow(newRow);
 
-          if (payload.eventType === "INSERT") {
-            setSupportServices((prev) => {
-              // avoid dupes
-              if (prev.some((p) => p.id === mapped.id)) {
-                return prev.map((p) => (p.id === mapped.id ? mapped : p));
-              }
-              return [...prev, mapped];
-            });
-          } else if (payload.eventType === "UPDATE") {
-            setSupportServices((prev) => prev.map((item) => (item.id === mapped.id ? mapped : item)));
-          }
+          setSupportServices((prev) => {
+            const ix = prev.findIndex((p) => p.id === mapped.id);
+            if (ix === -1) return [...prev, mapped];
+            const next = [...prev];
+            next[ix] = mapped;
+            return next;
+          });
         }
       )
       .subscribe();
@@ -204,7 +211,6 @@ const Support = () => {
     const terms: string[] = [];
     if (typeFilter !== "all") terms.push(typeFilter.replace("-", " "));
     if (searchTerm.trim()) terms.push(searchTerm.trim());
-    // fallback generic
     if (terms.length === 0) terms.push("support services");
     return encodeURIComponent(terms.join(" "));
   }, [typeFilter, searchTerm]);
@@ -223,7 +229,7 @@ const Support = () => {
           <p className="mt-3 text-base md:text-lg text-muted-foreground max-w-2xl mx-auto">
             Connect with vetted lawyers, therapists, activists, and support groups to help survivors and allies.
           </p>
-          <Button asChild >
+          <Button asChild>
             <Link to="/support/apply">
               <Plus className="h-4 w-4 mr-2" />
               Apply to Offer Support Services
@@ -235,7 +241,9 @@ const Support = () => {
         <div className="max-w-6xl mx-auto mb-6">
           <Card className="border-green-200/40">
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><CheckCircle className="h-4 w-4 text-green-600"/> What "Verified" Means</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600" /> What “Verified” Means
+              </CardTitle>
               <CardDescription>
                 We review providers before listing and perform periodic checks to keep information accurate and safe.
               </CardDescription>
@@ -294,9 +302,9 @@ const Support = () => {
                     </SelectTrigger>
                     <SelectContent className="max-h-64">
                       <SelectItem value="all">All</SelectItem>
-                      {VALID_AVAILABILITY.map((availability) => (
-                        <SelectItem key={availability} value={availability}>
-                          {availability.charAt(0).toUpperCase() + availability.slice(1)}
+                      {VALID_AVAILABILITY.map((a) => (
+                        <SelectItem key={a} value={a}>
+                          {a.charAt(0).toUpperCase() + a.slice(1)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -312,30 +320,39 @@ const Support = () => {
           <Card className="mb-6">
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <MapPin className="h-4 w-4 text-primary"/>
+                <MapPin className="h-4 w-4 text-primary" />
                 Map View (beta)
               </CardTitle>
               <CardDescription>Location-aware map of filtered services. Pins reflect your filters.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-3 mb-3">
-                <Button size="sm" variant={mapEnabled ? "default" : "outline"} onClick={() => setMapEnabled(v => !v)} aria-pressed={mapEnabled} aria-label="Toggle map view">
+                <Button
+                  size="sm"
+                  variant={mapEnabled ? "default" : "outline"}
+                  onClick={() => setMapEnabled((v) => !v)}
+                  aria-pressed={mapEnabled}
+                  aria-label="Toggle map view"
+                >
                   {mapEnabled ? "Hide Map" : "Show Map"}
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={async () => {
-                    const granted = await new Promise<{lat:number;lng:number}|null>((resolve) => {
-                      if (!('geolocation' in navigator)) return resolve(null);
+                    const granted = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+                      if (!("geolocation" in navigator)) return resolve(null);
                       navigator.geolocation.getCurrentPosition(
-                        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
                         () => resolve(null),
                         { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
                       );
                     });
                     setLoc(granted);
-                    if (!granted) toast.message("Location unavailable", { description: "We couldn't access your location. The map will show general results."});
+                    if (!granted)
+                      toast.message("Location unavailable", {
+                        description: "We couldn't access your location. The map will show general results.",
+                      });
                   }}
                   aria-label="Use my location"
                 >
@@ -351,60 +368,81 @@ const Support = () => {
                     style={{ border: 0 }}
                     loading="lazy"
                     referrerPolicy="no-referrer-when-downgrade"
-                    src={`https://www.google.com/maps?q=${mapQuery}${loc ? `%20@${loc.lat},${loc.lng},13z` : ''}&output=embed`}
+                    src={`https://www.google.com/maps?q=${mapQuery}${loc ? `%20@${loc.lat},${loc.lng},13z` : ""}&output=embed`}
                   />
                 </div>
               )}
             </CardContent>
           </Card>
-          {/* Nearby services quick-open */}
+
+          {/* Nearby quick-open */}
           <Card className="mb-6">
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><MapPin className="h-4 w-4 text-primary"/> Find Nearby</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-primary" /> Find Nearby
+              </CardTitle>
               <CardDescription>Open Google Maps searches near you for common needs.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={async () => {
-                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
-                  if (!('geolocation' in navigator)) return resolve(null);
-                  navigator.geolocation.getCurrentPosition(
-                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-                    () => resolve(null),
-                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
-                  )
-                });
-                let url = 'https://www.google.com/maps/search/legal+aid';
-                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
-                window.open(url, '_blank', 'noopener,noreferrer');
-              }}><Navigation className="h-4 w-4 mr-2"/> Legal Aid</Button>
-              <Button size="sm" variant="outline" onClick={async () => {
-                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
-                  if (!('geolocation' in navigator)) return resolve(null);
-                  navigator.geolocation.getCurrentPosition(
-                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-                    () => resolve(null),
-                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
-                  )
-                });
-                let url = 'https://www.google.com/maps/search/therapy+counseling';
-                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
-                window.open(url, '_blank', 'noopener,noreferrer');
-              }}><Navigation className="h-4 w-4 mr-2"/> Therapy</Button>
-              <Button size="sm" variant="outline" onClick={async () => {
-                const loc = await new Promise<{lat:number;lng:number}|null>(resolve => {
-                  if (!('geolocation' in navigator)) return resolve(null);
-                  navigator.geolocation.getCurrentPosition(
-                    p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-                    () => resolve(null),
-                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
-                  )
-                });
-                let url = 'https://www.google.com/maps/search/women+shelter';
-                if (loc) url += `/@${loc.lat},${loc.lng},14z`;
-                window.open(url, '_blank', 'noopener,noreferrer');
-              }}><Navigation className="h-4 w-4 mr-2"/> Shelter</Button>
+              <Button
+                size="sm"
+                onClick={async () => {
+                  const loc = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+                    if (!("geolocation" in navigator)) return resolve(null);
+                    navigator.geolocation.getCurrentPosition(
+                      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                      () => resolve(null),
+                      { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                    );
+                  });
+                  let url = "https://www.google.com/maps/search/legal+aid";
+                  if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }}
+              >
+                <Navigation className="h-4 w-4 mr-2" /> Legal Aid
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  const loc = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+                    if (!("geolocation" in navigator)) return resolve(null);
+                    navigator.geolocation.getCurrentPosition(
+                      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                      () => resolve(null),
+                      { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                    );
+                  });
+                  let url = "https://www.google.com/maps/search/therapy+counseling";
+                  if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }}
+              >
+                <Navigation className="h-4 w-4 mr-2" /> Therapy
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  const loc = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+                    if (!("geolocation" in navigator)) return resolve(null);
+                    navigator.geolocation.getCurrentPosition(
+                      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+                      () => resolve(null),
+                      { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
+                    );
+                  });
+                  let url = "https://www.google.com/maps/search/women+shelter";
+                  if (loc) url += `/@${loc.lat},${loc.lng},14z`;
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }}
+              >
+                <Navigation className="h-4 w-4 mr-2" /> Shelter
+              </Button>
             </CardContent>
           </Card>
+
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-bold text-foreground">Available Support ({filteredSupport.length})</h2>
           </div>
@@ -416,8 +454,7 @@ const Support = () => {
           ) : (
             <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
               {filteredSupport.map((support) => {
-                const IconComponent =
-                  typeIcons[support.type as keyof typeof typeIcons] || Users;
+                const IconComponent = typeIcons[support.type as keyof typeof typeIcons] || Users;
 
                 const hasEmail = !!support.contact_info.email;
                 const hasPhone = !!support.contact_info.phone;
@@ -542,7 +579,9 @@ const Support = () => {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => toast.success("Callback request sent. The provider will reach out when available.")}
+                          onClick={() =>
+                            toast.success("Callback request sent. The provider will reach out when available.")
+                          }
                           aria-label="Request callback"
                         >
                           Request Callback
@@ -551,17 +590,23 @@ const Support = () => {
                           size="icon"
                           variant="ghost"
                           onClick={() => toggleSaved("support", support.id)}
-                          aria-label={isSaved("support", support.id) ? `Unsave ${support.name || "service"}` : `Save ${support.name || "service"}`}
+                          aria-label={
+                            isSaved("support", support.id)
+                              ? `Unsave ${support.name || "service"}`
+                              : `Save ${support.name || "service"}`
+                          }
                         >
-                          <Bookmark className={`h-4 w-4 ${isSaved("support", support.id) ? "fill-yellow-500 text-yellow-500" : ""}`} />
+                          <Bookmark
+                            className={`h-4 w-4 ${
+                              isSaved("support", support.id) ? "fill-yellow-500 text-yellow-500" : ""
+                            }`}
+                          />
                         </Button>
                       </div>
 
                       {support.languages?.length > 0 && (
                         <div className="mt-3 pt-3 border-t">
-                          <p className="text-xs text-muted-foreground">
-                            Languages: {support.languages.join(", ")}
-                          </p>
+                          <p className="text-xs text-muted-foreground">Languages: {support.languages.join(", ")}</p>
                         </div>
                       )}
                       {hasWebsite && (
@@ -601,10 +646,16 @@ const Support = () => {
                   <h4 className="font-semibold mb-2">Crisis Hotlines</h4>
                   <ul className="text-sm space-y-1 text-muted-foreground">
                     <li>
-                      National: <a href="tel:1-800-799-7233" className="text-primary hover:underline">1-800-799-7233</a>
+                      National:{" "}
+                      <a href="tel:1-800-799-7233" className="text-primary hover:underline">
+                        116
+                      </a>
                     </li>
                     <li>
-                      Crisis Text: Text START to <a href="sms:88788" className="text-primary hover:underline">88788</a>
+                      Crisis Text: Text START to{" "}
+                      <a href="sms:88788" className="text-primary hover:underline">
+                        116
+                      </a>
                     </li>
                   </ul>
                 </div>
@@ -613,7 +664,10 @@ const Support = () => {
                   <ul className="text-sm space-y-1 text-muted-foreground">
                     <li>Emergency Protection Orders</li>
                     <li>
-                      24/7 Legal Aid: <a href="tel:1-800-621-4357" className="text-primary hover:underline">1-800-621-4357</a>
+                      24/7 Legal Aid:{" "}
+                      <a href="tel:1-800-621-4357" className="text-primary hover:underline">
+                        116
+                      </a>
                     </li>
                   </ul>
                 </div>
@@ -621,10 +675,16 @@ const Support = () => {
                   <h4 className="font-semibold mb-2">Immediate Safety</h4>
                   <ul className="text-sm space-y-1 text-muted-foreground">
                     <li>
-                      Emergency: <a href="tel:911" className="text-primary hover:underline">911</a>
+                      Emergency:{" "}
+                      <a href="tel:911" className="text-primary hover:underline">
+                        112
+                      </a>
                     </li>
                     <li>
-                      Safe Shelter: <a href="tel:1-800-942-6906" className="text-primary hover:underline">1-800-942-6906</a>
+                      Safe Shelter:{" "}
+                      <a href="tel:1-800-942-6906" className="text-primary hover:underline">
+                        +23279153915
+                      </a>
                     </li>
                   </ul>
                 </div>

@@ -1,3 +1,4 @@
+// src/pages/admin/Signin.tsx
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -12,16 +13,17 @@ import Loading from "@/components/utils/Loading";
 import Logo from "@/assets/safespacelogo.png";
 import supabase from "@/server/supabase";
 import {
+  ADMIN_PROFILE_KEY,
   ADMIN_ROLE_KEY,
-  clearAdminSession,
+  ADMIN_SESSION_EVENT,
   loadAdminSession,
   type AdminProfile,
   type AdminRole,
 } from "@/hooks/authUtils";
 
 const loginSchema = z.object({
-  email: z.string().email("Invalid email address").max(255, "Email must be less than 255 characters"),
-  password: z.string().min(8, "Password must be at least 8 characters").max(128, "Password must be less than 128 characters"),
+  email: z.string().email("Invalid email address").max(255),
+  password: z.string().min(8, "Password must be at least 8 characters").max(128),
 });
 
 const readStoredAdmin = () => {
@@ -30,7 +32,8 @@ const readStoredAdmin = () => {
   }
   try {
     const profile = loadAdminSession();
-    const role = profile?.role ?? (localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null) ?? null;
+    const role =
+      profile?.role ?? ((localStorage.getItem(ADMIN_ROLE_KEY) as AdminRole | null) ?? null);
     return { role, profile };
   } catch {
     return { role: null as AdminRole | null, profile: null as AdminProfile | null };
@@ -51,7 +54,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     const { role, profile } = readStoredAdmin();
     if (role && profile) {
       setAlreadyAdmin(true);
-      toast.info("You're already signed in as an admin.");
+      toast.info("You are already signed in.");
     } else {
       setAlreadyAdmin(false);
     }
@@ -61,6 +64,17 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     checkSession();
   }, [checkSession]);
 
+  const persistSession = (profile: AdminProfile) => {
+    try {
+      localStorage.setItem(ADMIN_PROFILE_KEY, JSON.stringify(profile));
+      localStorage.setItem(ADMIN_ROLE_KEY, profile.role);
+      localStorage.setItem("ss.admin.lastLogin", new Date().toISOString());
+      window.dispatchEvent(new Event(ADMIN_SESSION_EVENT));
+    } catch (e) {
+      console.warn("Failed to persist admin session", e);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
@@ -68,12 +82,8 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     setLoading(true);
     setFormErrors({});
 
-    const sanitizedInputs = {
-      email: email.trim().toLowerCase(),
-      password, // keep as typed
-    };
-
-    const result = loginSchema.safeParse(sanitizedInputs);
+    const sanitized = { email: email.trim().toLowerCase(), password };
+    const result = loginSchema.safeParse(sanitized);
     if (!result.success) {
       setFormErrors(result.error.flatten().fieldErrors);
       setLoading(false);
@@ -81,78 +91,54 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
     }
 
     try {
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email: sanitizedInputs.email,
-        password: sanitizedInputs.password,
+      // Sign in with Supabase Auth
+      const { error: authErr } = await supabase.auth.signInWithPassword({
+        email: sanitized.email,
+        password: sanitized.password,
       });
-
-      if (authError) {
-        const msg = authError.message?.toLowerCase() || "";
-        let message = "Invalid email or password";
-        if (msg.includes("email not confirmed")) message = "Confirm your email, then try again.";
-        if (msg.includes("invalid login credentials")) message = "Invalid email or password";
+      if (authErr) {
+        const message = "Invalid email or password";
         setFormErrors({ email: [message], password: [message] });
         toast.error(message);
         setLoading(false);
         return;
       }
 
-      // assert session before RPC
-      const { data: userData, error: getUserErr } = await supabase.auth.getUser();
-      if (getUserErr || !userData?.user) {
-        await supabase.auth.signOut();
-        clearAdminSession();
-        const message = "Session missing after sign-in.";
+      // Load server-trusted admin profile
+      const { data: me, error: meErr } = await supabase.rpc("admin_me");
+      if (meErr || !me) {
+        const message = "Not an active admin";
         setFormErrors({ email: [message], password: [message] });
         toast.error(message);
         setLoading(false);
         return;
       }
 
-      const { data: ensured, error: rpcErr } = await supabase.rpc(
-        "ensure_admin_for_current_user",
-        { p_role: "super_admin" }
-      );
+      const row = Array.isArray(me) ? me[0] : me;
 
-      if (rpcErr || !ensured || ensured.length === 0) {
-        console.error("ensure_admin_for_current_user error:", rpcErr);
-        await supabase.auth.signOut();
-        clearAdminSession();
-        const message = "Admin setup failed. Contact support.";
-        setFormErrors({ email: [message], password: [message] });
-        toast.error(message);
-        setLoading(false);
-        return;
-      }
+      const profile: AdminProfile = {
+        id: row.id,
+        user_id: row.user_id ?? null,
+        name: row.name,
+        email: row.email,
+        username: row.username ?? null,
+        status: row.status,
+        join_date: row.join_date ?? row.created_at,
+        last_active: row.last_active ?? null,
+        avatar_url: row.avatar_url ?? null,
+        bio: row.bio ?? null,
+        teams: row.teams ?? [],
+        created_at: row.created_at,
+        updated_at: row.updated_at ?? row.created_at,
+        role: row.role as AdminRole,
+      };
 
-      const profile = ensured[0] as AdminProfile;
-
-      if (profile.status !== "active") {
-        await supabase.auth.signOut();
-        clearAdminSession();
-        const message = "Admin not active.";
-        setFormErrors({ email: [message] });
-        toast.error(message);
-        setLoading(false);
-        return;
-      }
-
-
-      try {
-        localStorage.setItem("ss.admin.profile", JSON.stringify(profile));
-        localStorage.setItem("ss.admin.role", profile.role);
-        localStorage.setItem("ss.admin.lastLogin", new Date().toISOString());
-      } catch (storageErr) {
-        console.warn("Failed to persist admin session", storageErr);
-      }
-
-      setAlreadyAdmin(true);
+      persistSession(profile);
       toast.success("Login successful.");
-      navigate("/admin-dashboard");
+      navigate("/admin-dashboard", { replace: true });
     } catch (err) {
       console.error(err);
-      const error = err as { message?: string };
-      const message = error.message || "Login failed. Please try again.";
+      const message = "Login failed. Try again.";
       setFormErrors({ email: [message], password: [message] });
       toast.error(message);
     } finally {
@@ -161,9 +147,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
   };
 
   const handleInputChange = (field: "email" | "password", value: string) => {
-    if (formErrors[field]) {
-      setFormErrors((prev) => ({ ...prev, [field]: undefined }));
-    }
+    if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: undefined }));
     if (field === "email") setEmail(value);
     else setPassword(value);
   };
@@ -179,6 +163,7 @@ const Signin = ({ className, ...props }: React.ComponentProps<"div">) => {
         <ArrowLeft className="h-5 w-5 text-primary" />
         <span className="font-lora">Back</span>
       </Button>
+
       <div className={cn("flex flex-col gap-6", className)} {...props}>
         <Card className="overflow-hidden">
           <CardContent className="grid p-0 md:grid-cols-2">

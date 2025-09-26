@@ -1,4 +1,4 @@
-// SystemSettings.tsx
+// src/components/admin/SystemSettings.tsx
 import { useCallback, useEffect, useMemo, useState } from "react";
 import supabase from "@/server/supabase";
 import { AppSidebar } from "@/components/utils/app-sidebar";
@@ -11,14 +11,28 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, Lock, Bell, Globe, Save } from "lucide-react";
-import type { Settings } from "@/lib/types";
 import { z } from "zod";
 import AdminHeader from "@/components/admin/AdminHeader";
 
 /* ----------------------------- Types & Schemas ---------------------------- */
 
 type Language = "en" | "es" | "fr" | "de";
-type SettingsRow = Settings & { id: string };
+
+type Settings = {
+  notifications: { email: boolean; sms: boolean; push: boolean };
+  system: { maintenance_mode: boolean; api_rate_limit: number; max_file_size: number };
+  security: { two_factor_auth: boolean; session_timeout: number };
+  language: Language;
+};
+
+type SettingsRow = {
+  id: string; // 'global'
+  notifications: Settings["notifications"] | null;
+  system: Settings["system"] | null;
+  security: Settings["security"] | null;
+  language: Settings["language"] | null;
+  updated_at?: string | null;
+};
 
 const numberSchema = z.number().int().min(0, "Value must be a positive integer");
 const sessionTimeoutSchema = numberSchema
@@ -40,6 +54,27 @@ const DEFAULT_SETTINGS: Settings = {
   language: "en",
 };
 
+function rowToSettings(row: SettingsRow | null): Settings {
+  const r = row ?? ({} as SettingsRow);
+  return {
+    notifications: {
+      email: r.notifications?.email ?? DEFAULT_SETTINGS.notifications.email,
+      sms: r.notifications?.sms ?? DEFAULT_SETTINGS.notifications.sms,
+      push: r.notifications?.push ?? DEFAULT_SETTINGS.notifications.push,
+    },
+    system: {
+      maintenance_mode: r.system?.maintenance_mode ?? DEFAULT_SETTINGS.system.maintenance_mode,
+      api_rate_limit: r.system?.api_rate_limit ?? DEFAULT_SETTINGS.system.api_rate_limit,
+      max_file_size: r.system?.max_file_size ?? DEFAULT_SETTINGS.system.max_file_size,
+    },
+    security: {
+      two_factor_auth: r.security?.two_factor_auth ?? DEFAULT_SETTINGS.security.two_factor_auth,
+      session_timeout: r.security?.session_timeout ?? DEFAULT_SETTINGS.security.session_timeout,
+    },
+    language: (r.language ?? DEFAULT_SETTINGS.language) as Language,
+  };
+}
+
 /* --------------------------------- Page ---------------------------------- */
 
 const SystemSettings = () => {
@@ -50,46 +85,55 @@ const SystemSettings = () => {
 
   const fetchSettings = useCallback(async () => {
     try {
-
-      // prefer maybeSingle: null when no row
       const { data, error } = await supabase
         .from("settings")
-        .select("*")
+        .select("id, notifications, system, security, language, updated_at")
         .eq("id", "global")
         .maybeSingle();
 
       if (error) throw error;
 
-      if (data) {
-        const s = data as Settings;
-        setSettings(s);
-        setInitialSettings(s);
-      } else {
-        const defaultsRow: SettingsRow = { id: "global", ...DEFAULT_SETTINGS };
+      // Seed defaults if no row
+      if (!data) {
+        const insertRow: SettingsRow = {
+          id: "global",
+          notifications: DEFAULT_SETTINGS.notifications,
+          system: DEFAULT_SETTINGS.system,
+          security: DEFAULT_SETTINGS.security,
+          language: DEFAULT_SETTINGS.language,
+        };
         const { data: inserted, error: insertErr } = await supabase
           .from("settings")
-          .insert(defaultsRow)
-          .select()
+          .insert(insertRow)
+          .select("id, notifications, system, security, language, updated_at")
           .single();
         if (insertErr) throw insertErr;
-        const s = (inserted as SettingsRow) as Settings;
+        const s = rowToSettings(inserted);
         setSettings(s);
         setInitialSettings(s);
+        return;
       }
+
+      const s = rowToSettings(data as SettingsRow);
+      setSettings(s);
+      setInitialSettings(s);
     } catch (err: unknown) {
       console.error("Error fetching settings:", err);
-      const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: string }).code : undefined;
-      const msg = typeof err === "object" && err !== null && "message" in err ? (err as { message?: string }).message : undefined;
+      let code: string | undefined;
+      let msg: string | undefined;
+      if (typeof err === "object" && err !== null) {
+        code = (err as { code?: string }).code;
+        msg = (err as { message?: string }).message;
+      }
       if (code === "42P01") {
         toast.error("Settings table is missing. Run the latest database migrations.");
       } else if (code === "42501") {
         toast.error("You do not have permission to view system settings.");
       } else {
-        const errorMessage = msg || "Failed to load settings.";
-        toast.error(errorMessage);
+        toast.error(msg || "Failed to load settings.");
       }
     }
-  }, []); // no deps -> stable
+  }, []);
 
   useEffect(() => {
     fetchSettings();
@@ -101,23 +145,18 @@ const SystemSettings = () => {
         { event: "*", schema: "public", table: "settings", filter: "id=eq.global" },
         (payload) => {
           if (payload.new) {
-            const data = payload.new as Settings;
-            setSettings(data);
-            setInitialSettings(data);
+            const next = rowToSettings(payload.new as SettingsRow);
+            setSettings(next);
+            setInitialSettings(next);
           }
         }
       )
-      .subscribe((_status, error) => {
-        if (error) {
-          console.error("Error in settings subscription:", error);
-          toast.error("Failed to update settings in real-time.");
-        }
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(subscription);
     };
-  }, [fetchSettings]); // fetchSettings is stable, effect runs once
+  }, [fetchSettings]);
 
   const handleInputChange = (
     category: keyof Settings,
@@ -161,22 +200,41 @@ const SystemSettings = () => {
 
     try {
       setSaving(true);
-      // persist
-      const row: SettingsRow = { id: "global", ...settings };
-      const { error } = await supabase.from("settings").upsert(row);
+      const row: SettingsRow = {
+        id: "global",
+        notifications: settings.notifications,
+        system: settings.system,
+        security: settings.security,
+        language: settings.language,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabase
+        .from("settings")
+        .upsert(row, { onConflict: "id" })
+        .select("id, notifications, system, security, language, updated_at")
+        .single();
+
       if (error) throw error;
+
+      const next = rowToSettings(data as SettingsRow);
+      setSettings(next);
+      setInitialSettings(next);
       toast.success("Settings saved successfully.");
-      setInitialSettings(settings);
     } catch (err: unknown) {
       console.error("Error saving settings:", err);
-      const errorCode = typeof err === "object" && err !== null && "code" in err ? (err as { code?: string }).code : undefined;
-      const errorMessage = typeof err === "object" && err !== null && "message" in err ? (err as { message?: string }).message : "Failed to save settings.";
-      if (errorCode === "42501") {
+      let code: string | undefined;
+      let msg: string | undefined;
+      if (typeof err === "object" && err !== null) {
+        code = (err as { code?: string }).code;
+        msg = (err as { message?: string }).message;
+      }
+      if (code === "42501") {
         toast.error("You lack permission to save settings.");
-      } else if (errorCode === "42P01") {
+      } else if (code === "42P01") {
         toast.error("Settings table is missing. Run the latest database migrations.");
       } else {
-        toast.error(errorMessage);
+        toast.error(msg || "Failed to save settings.");
       }
     } finally {
       setSaving(false);

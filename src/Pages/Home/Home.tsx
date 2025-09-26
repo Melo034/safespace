@@ -8,7 +8,6 @@ import ResourceSpotlight from "@/components/Home/ResourceSpotlight"
 import RecentStoriesHome from "@/components/Home/RecentStoriesHome"
 import TrustSecurity from "@/components/Home/TrustSecurity"
 import FAQ from "@/components/Home/FAQ"
-import Partners from "@/components/Home/Partners"
 import GetUpdates from "@/components/Home/GetUpdates"
 import StickyGetHelpBar from "@/components/Home/StickyGetHelpBar"
 import Statistics from "@/components/Home/Statistics"
@@ -34,7 +33,6 @@ const Home = () => {
         <SafetyTips />
         <TrustSecurity />
         <FAQ />
-        <Partners />
         <GetUpdates />
         <Testimonials />
       </main>

@@ -85,12 +85,6 @@ const AdminDialogs: React.FC<AdminDialogsProps> = ({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <Input
-              placeholder="User ID (optional)"
-              value={formData.user_id ?? ""}
-              onChange={(e) => setFormData({ ...formData, user_id: e.target.value })}
-              aria-label="User ID"
-            />
             <div>
               <div className="flex items-center gap-2">
                 <Input

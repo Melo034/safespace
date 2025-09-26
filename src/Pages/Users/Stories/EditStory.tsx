@@ -1,3 +1,8 @@
+// EditStory.tsx — aligned with your Supabase schema & policies
+// - Reads/writes `stories` (status: 'draft' | 'published' | 'pending'; tags: text[]; content: text NOT NULL)
+// - Category is stored as a tag "cat:<category>"
+// - Only the story author or an admin (row in `admin_members`) can edit
+
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import supabase from "@/server/supabase";
@@ -9,152 +14,195 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { toast } from "sonner";
 
 const CATEGORIES = ["healing", "escape", "support", "recovery", "awareness"] as const;
+type Category = (typeof CATEGORIES)[number];
 
 type StoryRow = {
   id: string;
   title: string | null;
   content: string | null;
   tags: string[] | null;
-  status?: string | null;
-  author_id?: string | null;
+  status: "draft" | "published" | "pending" | null;
+  author_id: string | null;
 };
 
 export default function EditStory() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+  const [category, setCategory] = useState<Category | "">("");
+  const [status, setStatus] = useState<"draft" | "published">("draft");
+
+  const [authorId, setAuthorId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
   const fmtErr = (e: unknown) => {
     if (typeof e === "string") return e;
     if (e && typeof e === "object") {
-      const anyE = e as any;
+      const anyE = e as Record<string, unknown>;
       return anyE.message || anyE.error_description || anyE.error || JSON.stringify(anyE);
     }
     return "Unknown error";
   };
-  const { id } = useParams();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [tagsInput, setTagsInput] = useState("");
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number] | "">("");
-  const [status, setStatus] = useState<"draft" | "published">("draft");
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
 
+  // Helpers
+  const parseTags = (): string[] => {
+    const basics = (tagsInput || "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .filter((t) => !/^cat:/.test(t)); // we'll inject cat: separately
+
+    const withCat = category ? [`cat:${category}`, ...basics] : basics;
+
+    // unique, keep order (first occurrence wins)
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const t of withCat) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        deduped.push(t);
+      }
+    }
+    return deduped;
+  };
+
+  // Load story + auth/admin
   useEffect(() => {
     (async () => {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) {
-        setError("You must be logged in to edit a story.");
-        navigate("/auth/login");
-        return;
-      }
-      if (!id) {
-        setError("Invalid story id");
-        return;
-      }
       try {
-        let { data, error } = await supabase
+        setLoading(true);
+
+        if (!id) {
+          setError("Invalid story id.");
+          return;
+        }
+
+        // Auth
+        const { data: auth } = await supabase.auth.getUser();
+        const me = auth?.user ?? null;
+        if (!me) {
+          setError("You must be logged in to edit a story.");
+          navigate("/auth/login");
+          return;
+        }
+
+        // Admin?
+        const { data: adminRow } = await supabase
+          .from("admin_members")
+          .select("user_id, role")
+          .eq("user_id", me.id)
+          .maybeSingle();
+        const amAdmin = !!adminRow;
+        setIsAdmin(amAdmin);
+
+        // Load story
+        const { data, error } = await supabase
           .from("stories")
           .select("id,title,content,tags,status,author_id")
           .eq("id", id)
           .maybeSingle<StoryRow>();
-        // Fallback when 'status' column doesn't exist
-        if (error && (error as any).code === "42703") {
-          const r2 = await supabase
-            .from("stories")
-            .select("id,title,content,tags,author_id")
-            .eq("id", id)
-            .maybeSingle<StoryRow>();
-          data = r2.data as any;
-          error = r2.error as any;
-        }
         if (error) throw error;
-        if (!data) throw new Error("Story not found");
-        if (data.author_id && data.author_id !== auth.user.id) {
+        if (!data) throw new Error("Story not found.");
+
+        setAuthorId(data.author_id);
+
+        // Client-side permission check (RLS also protects server-side)
+        const isOwner = data.author_id === me.id;
+        if (!isOwner && !amAdmin) {
           setError("You are not allowed to edit this story.");
           return;
         }
-        setTitle(data.title || "");
-        setContent(data.content || "");
+
+        // Populate form
+        setTitle(data.title ?? "");
+        setContent(data.content ?? "");
+
         const tagList = Array.isArray(data.tags) ? data.tags : [];
-        const cat = tagList.find((t) => t.startsWith("cat:"))?.split(":")[1] || "";
-        setCategory((cat as any) || "");
-        setTagsInput(tagList.filter((t) => !t.startsWith("cat:")).join(", "));
-        setStatus(((data.status as any) === "published" ? "published" : "draft"));
+        const foundCat = tagList.find((t) => /^cat:/.test(t))?.split(":")[1] as Category | undefined;
+        setCategory(foundCat && CATEGORIES.includes(foundCat) ? foundCat : "");
+
+        setTagsInput(tagList.filter((t) => !/^cat:/.test(t)).join(", "));
+        setStatus((data.status === "published" ? "published" : "draft"));
       } catch (e) {
         console.error(e);
         const msg = fmtErr(e);
         setError("Failed to load story.");
-        toast.error("Failed to load story.", { description: msg });
+        toast.error("Failed to load story.", { description: String(msg) });
       } finally {
         setLoading(false);
       }
     })();
   }, [id, navigate]);
 
-  const parseTags = () => {
-    const raw = (tagsInput || "")
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    const withCat = category ? [
-      `cat:${category}`,
-      ...raw.filter((t) => !t.startsWith("cat:")),
-    ] : raw;
-    return Array.from(new Set(withCat));
-  };
-
-  const update = async (nextStatus?: "draft" | "published") => {
+  const handleUpdate = async (nextStatus?: "draft" | "published") => {
     if (!id) return;
+
+    const desired = nextStatus ?? status;
+
     if (!content.trim()) {
       toast.error("Please add your story content.");
       return;
     }
+    if (desired !== "draft" && desired !== "published") {
+      toast.error("Invalid status.");
+      return;
+    }
+
+    setSaving(true);
     try {
-      setSaving(true);
       const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Not authenticated.");
+      const me = auth?.user ?? null;
+      if (!me) throw new Error("Not authenticated.");
+
+      // Client-side guard (server-side RLS still enforced)
+      const isOwner = authorId === me.id;
+      if (!isOwner && !isAdmin) {
+        toast.error("You are not allowed to update this story.");
+        return;
+      }
+
       const payload = {
         title: title.trim() || null,
         content: content.trim(),
-        tags: parseTags(),
-        status: nextStatus ?? status,
+        tags: parseTags(), // text[]
+        status: desired, // 'draft' | 'published'
         updated_at: new Date().toISOString(),
-      } as any;
-      let { error } = await supabase
-        .from("stories")
-        .update(payload)
-        .eq("id", id)
-        .eq("author_id", auth.user.id);
-      if (error && (error as any).code === "42703") {
-        // Retry without optional columns that might not exist
-        const fallback = {
-          title: payload.title,
-          content: payload.content,
-          tags: payload.tags,
-        } as any;
-        const r2 = await supabase
-          .from("stories")
-          .update(fallback)
-          .eq("id", id)
-          .eq("author_id", auth.user.id);
-        error = r2.error as any;
-      }
+      };
+
+      // For authors, we include author filter; for admins we just target by id
+      const q = supabase.from("stories").update(payload).eq("id", id);
+      const { error } = isAdmin && !isOwner ? await q : await q.eq("author_id", me.id);
+
       if (error) throw error;
-      toast.success("Story updated");
+
+      toast.success("Story updated.");
       navigate("/account/my-stories");
     } catch (e) {
       console.error(e);
       const msg = fmtErr(e);
-      if (/row-level security|RLS/i.test(msg)) {
+      if (/row-level security|RLS/i.test(String(msg))) {
         toast.error("Permission denied by security policy.", {
-          description: "Ensure you are the story author and logged in.",
+          description: "Ensure you are the story author (or admin) and logged in.",
         });
       } else {
-        toast.error("Failed to update story.", { description: msg });
+        toast.error("Failed to update story.", { description: <>{msg}</> });
       }
     } finally {
       setSaving(false);
@@ -186,8 +234,10 @@ export default function EditStory() {
           <div className="container flex-1 items-start md:grid md:grid-cols-[220px_1fr] md:gap-6 lg:grid-cols-[240px_1fr] lg:gap-10 py-8">
             <Sidebar />
             <main className="flex w-full flex-col overflow-hidden">
-              {error}
-              <Button onClick={() => window.location.reload()} className="mt-4">Retry</Button>
+              <div className="rounded-md border p-4 text-red-600">{error}</div>
+              <Button onClick={() => window.location.reload()} className="mt-4">
+                Retry
+              </Button>
             </main>
           </div>
         </div>
@@ -214,8 +264,14 @@ export default function EditStory() {
               <div className="grid gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="title">Title (optional)</Label>
-                  <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Give your story a title" />
+                  <Input
+                    id="title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Give your story a title"
+                  />
                 </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="content">Story</Label>
                   <Textarea
@@ -226,28 +282,47 @@ export default function EditStory() {
                     placeholder="Update your story..."
                   />
                 </div>
+
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="space-y-2">
                     <Label>Category</Label>
-                    <Select value={category} onValueChange={(v) => setCategory(v as any)}>
+                    <Select
+                      value={category}
+                      onValueChange={(v) => setCategory(v as Category)}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Choose a category" />
                       </SelectTrigger>
                       <SelectContent>
                         {CATEGORIES.map((c) => (
-                          <SelectItem key={c} value={c}>{c[0].toUpperCase() + c.slice(1)}</SelectItem>
+                          <SelectItem key={c} value={c}>
+                            {c[0].toUpperCase() + c.slice(1)}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="tags">Tags (comma separated)</Label>
-                    <Input id="tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="e.g. healing, support, sensitive" />
+                    <Input
+                      id="tags"
+                      value={tagsInput}
+                      onChange={(e) => setTagsInput(e.target.value)}
+                      placeholder="e.g. healing, support, sensitive"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Category is saved as a tag like <code>cat:{category || "healing"}</code>.
+                    </p>
                   </div>
                 </div>
+
                 <div className="space-y-2">
                   <Label>Status</Label>
-                  <Select value={status} onValueChange={(v) => setStatus(v as any)}>
+                  <Select
+                    value={status}
+                    onValueChange={(v) => setStatus(v as "draft" | "published")}
+                  >
                     <SelectTrigger className="w-48">
                       <SelectValue />
                     </SelectTrigger>
@@ -260,8 +335,20 @@ export default function EditStory() {
               </div>
 
               <div className="flex items-center gap-3 justify-end">
-                <Button variant="outline" disabled={saving} onClick={() => update("draft")}>Save as Draft</Button>
-                <Button className="bg-primary hover:bg-primary/80" disabled={saving} onClick={() => update("published")}>{saving ? "Saving..." : "Save & Publish"}</Button>
+                <Button
+                  variant="outline"
+                  disabled={saving}
+                  onClick={() => handleUpdate("draft")}
+                >
+                  Save as Draft
+                </Button>
+                <Button
+                  className="bg-primary hover:bg-primary/80"
+                  disabled={saving}
+                  onClick={() => handleUpdate("published")}
+                >
+                  {saving ? "Saving..." : "Save & Publish"}
+                </Button>
               </div>
             </div>
           </main>

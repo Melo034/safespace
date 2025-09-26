@@ -1,3 +1,4 @@
+// Story.tsx
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import supabase from "@/server/supabase";
@@ -26,12 +27,15 @@ import {
   Trash2,
   Shield,
   BadgeCheck,
+  Bookmark,
 } from "lucide-react";
-import type { PostgrestError } from "@supabase/supabase-js";
+import type { PostgrestError, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import Loading from "@/components/utils/Loading";
 import type { Story as StoryType, Comment } from "@/lib/types";
 import LiveChat from "@/components/Home/LiveChat";
 import { usePreferences } from "@/hooks/usePreferences";
+
+/* ----------------------------- Validation ----------------------------- */
 
 const commentSchema = z.object({
   content: z
@@ -41,6 +45,8 @@ const commentSchema = z.object({
 });
 
 const ITEMS_PER_PAGE = 10;
+
+/* ------------------------------- Types -------------------------------- */
 
 type StoryRow = {
   id: string;
@@ -58,6 +64,15 @@ type CommentRow = {
   content: string | null;
   created_at: string;
 };
+
+type CommentView = Comment & { author_avatar: string | null };
+
+type StoryUI = StoryType & {
+  /** local-only flag for saved state */
+  is_saved?: boolean;
+};
+
+/* ----------------------------- Mappers ------------------------------- */
 
 function mapStoryRow(row: StoryRow, authorName: string): StoryType {
   return {
@@ -84,11 +99,12 @@ function mapStoryRow(row: StoryRow, authorName: string): StoryType {
   };
 }
 
+/* ------------------------------ Component ----------------------------- */
+
 export default function Story() {
-  const [story, setStory] = useState<StoryType | null>(null);
+  const [story, setStory] = useState<StoryUI | null>(null);
   const [newComment, setNewComment] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
-  type CommentView = Comment & { author_avatar: string | null };
   const [comments, setComments] = useState<CommentView[]>([]);
   const [loading, setLoading] = useState(true);
   const [commentLoading, setCommentLoading] = useState(false);
@@ -96,7 +112,12 @@ export default function Story() {
   const [hasMore, setHasMore] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [saveLoading, setSaveLoading] = useState(false);
   const [related, setRelated] = useState<Array<{ id: string; title: string; created_at: string }>>([]);
+
+  const navigate = useNavigate();
+  const { id: idParam } = useParams<{ id: string }>();
+  const { prefs } = usePreferences();
 
   const readingMinutes = useMemo(() => {
     const text = (story?.full_content || story?.content || "").trim();
@@ -111,67 +132,78 @@ export default function Story() {
       .map((t) => t.slice(3));
   }, [story?.tags]);
 
-  // Route in App.tsx uses "/stories/:id"; read param as id
-  const { id: idParam } = useParams();
-  const navigate = useNavigate();
+  const toc = useMemo(() => {
+    const source = (story?.full_content || story?.content || "").split(/\n+/);
+    const items: Array<{ level: 1 | 2 | 3; text: string; id: string }> = [];
+    const slug = (s: string) =>
+      s.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
 
-  const fetchComments = useCallback(
-    async (storyId: string, pageNum = 1) => {
-      const from = (pageNum - 1) * ITEMS_PER_PAGE;
-      const to = from + ITEMS_PER_PAGE - 1;
-
-      const { data, error, count } = await supabase
-        .from("comments")
-        .select("id, author_id, content, created_at", { count: "exact" })
-        .eq("story_id", storyId)
-        .order("created_at", { ascending: false })
-        .range(from, to);
-
-      if (error) {
-        console.error("Error fetching comments:", error);
-        return { rows: [] as CommentView[], total: 0 };
+    for (const line of source) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("### ")) {
+        const text = trimmed.slice(4);
+        items.push({ level: 3, text, id: slug(text) });
+      } else if (trimmed.startsWith("## ")) {
+        const text = trimmed.slice(3);
+        items.push({ level: 2, text, id: slug(text) });
+      } else if (trimmed.startsWith("# ")) {
+        const text = trimmed.slice(2);
+        items.push({ level: 1, text, id: slug(text) });
       }
+    }
 
-      const baseRows = (data ?? []).map((d: CommentRow) => ({
-        id: d.id,
-        author_id: d.author_id ?? null,
-        author_name: d.author_id ? "User" : "Anonymous",
-        content: d.content ?? "",
-        created_at: d.created_at,
-        author_avatar: null as string | null,
-      })) as CommentView[];
+    return items;
+  }, [story?.full_content, story?.content]);
 
-      // fetch commenter profiles in batch
-      const authorIds = Array.from(new Set(baseRows.map(r => r.author_id).filter(Boolean))) as string[];
-      if (authorIds.length > 0) {
-        const { data: profiles, error: pErr } = await supabase
-          .from("community_members")
-          .select("user_id,name,avatar_url")
-          .in("user_id", authorIds);
-        if (!pErr && profiles) {
-          const map = new Map<string, { name: string | null; avatar_url: string | null }>();
-          profiles.forEach((p: { user_id: string; name: string | null; avatar_url: string | null }) => {
-            map.set(p.user_id, { name: p.name, avatar_url: p.avatar_url });
-          });
-          baseRows.forEach((r) => {
-            if (r.author_id && map.has(r.author_id)) {
-              const prof = map.get(r.author_id)!;
-              r.author_name = prof.name || "User";
-              r.author_avatar = prof.avatar_url ?? null;
-            }
-          });
+  /* ---------------------------- Data loaders ---------------------------- */
+
+  const fetchComments = useCallback(async (storyId: string, pageNumber: number) => {
+    const from = (pageNumber - 1) * ITEMS_PER_PAGE;
+    const to = from + ITEMS_PER_PAGE - 1;
+
+    const { data, error, count } = await supabase
+      .from("comments")
+      .select("id, author_id, content, created_at", { count: "exact" })
+      .eq("story_id", storyId)
+      .order("created_at", { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const baseRows = (data || []) as CommentRow[];
+    const authorIds = Array.from(new Set(baseRows.map((r) => r.author_id).filter(Boolean))) as string[];
+
+    const authorMap = new Map<string, { name: string; avatar_url: string | null }>();
+    if (authorIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from("community_members")
+        .select("user_id, name, avatar_url")
+        .in("user_id", authorIds);
+
+      if (profiles) {
+        for (const p of profiles) {
+          authorMap.set(p.user_id, { name: p.name || "Anonymous", avatar_url: p.avatar_url ?? null });
         }
       }
+    }
 
-      return { rows: baseRows, total: count ?? baseRows.length };
-    },
-    []
-  );
+    const rows = baseRows.map((r) => ({
+      id: r.id,
+      author_id: r.author_id,
+      author_name: r.author_id ? authorMap.get(r.author_id)?.name || "Anonymous" : "Anonymous",
+      content: r.content || "",
+      created_at: r.created_at,
+      author_avatar: r.author_id ? authorMap.get(r.author_id)?.avatar_url ?? null : null,
+    })) as CommentView[];
+
+    return { rows, total: count ?? baseRows.length };
+  }, []);
+
+  /* -------------------------- Init / Realtime --------------------------- */
 
   useEffect(() => {
     let storyChannel: ReturnType<typeof supabase.channel> | null = null;
     let commentsChannel: ReturnType<typeof supabase.channel> | null = null;
-    let countsChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const init = async () => {
       try {
@@ -196,13 +228,14 @@ export default function Story() {
           return;
         }
 
+        // Story (fallback if status column missing)
         let { data: storyRow, error: storyError } = await supabase
           .from("stories")
           .select("id, title, content, author_id, created_at, tags, status")
           .eq("id", idParam)
           .maybeSingle<StoryRow>();
-        // Import PostgrestError at the top: import type { PostgrestError } from "@supabase/supabase-js";
-        if (storyError && (storyError as { code?: string } as PostgrestError).code === "42703") {
+
+        if (storyError && (storyError as PostgrestError).code === "42703") {
           const r2 = await supabase
             .from("stories")
             .select("id, title, content, author_id, created_at, tags")
@@ -218,11 +251,11 @@ export default function Story() {
           return;
         }
 
-        // visibility: published or owner/admin
+        // Visibility: published OR owner OR admin
         const visible =
           (storyRow as StoryRow).status
             ? (storyRow as StoryRow).status === "published" ||
-              (auth.user && (storyRow.author_id === auth.user.id || isAdminLocal))
+            (auth.user && (storyRow.author_id === auth.user.id || isAdminLocal))
             : true;
         if (!visible) {
           toast.error("This story is not available.");
@@ -234,19 +267,21 @@ export default function Story() {
         let authorName = "Anonymous";
         let authorAvatar: string | null = null;
         let authorVerified = false;
-        if (storyRow.author_id && (isAdminLocal || (auth.user && auth.user.id === storyRow.author_id))) {
+        if (storyRow.author_id) {
           const { data: cm } = await supabase
             .from("community_members")
             .select("name, avatar_url, verified")
             .eq("user_id", storyRow.author_id)
             .maybeSingle<{ name: string | null; avatar_url: string | null; verified: boolean | null }>();
-          authorName = cm?.name || "User";
-          authorAvatar = cm?.avatar_url ?? null;
-          authorVerified = !!cm?.verified;
+          if (cm) {
+            authorName = cm?.name || "Anonymous";
+            authorAvatar = cm?.avatar_url ?? null;
+            authorVerified = !!cm?.verified;
+          }
         }
 
         const base = mapStoryRow(storyRow as StoryRow, authorName);
-        const withAuthor = {
+        const withAuthor: StoryUI = {
           ...base,
           author: {
             ...base.author,
@@ -255,94 +290,150 @@ export default function Story() {
             verified: authorVerified,
             anonymous: !storyRow.author_id,
           },
-        } as StoryType;
+        };
 
-        // likes count and current user's like
-        const { data: likeCount } = await supabase
+        // Likes count
+        const { data: likeCountData } = await supabase
           .from("story_like_counts")
-          .select("story_id,likes")
-          .eq("story_id", (storyRow as StoryRow).id)
-          .maybeSingle<{ story_id: string; likes: number }>();
+          .select("likes")
+          .eq("story_id", storyRow.id)
+          .maybeSingle();
+        const likesValue = likeCountData?.likes ?? 0;
 
+        // Is liked by current user
         let isLiked = false;
         if (auth.user) {
           const { data: mine } = await supabase
             .from("story_likes")
             .select("story_id")
-            .eq("story_id", (storyRow as StoryRow).id)
+            .eq("story_id", storyRow.id)
             .eq("user_id", auth.user.id)
             .maybeSingle();
           isLiked = !!mine;
         }
 
+        // Comments count
         const { count: totalComments } = await supabase
           .from("comments")
           .select("id", { count: "exact", head: true })
           .eq("story_id", storyRow.id);
 
-        // views count
-        const { data: viewCount } = await supabase
+        // Views count
+        const { data: viewCountData } = await supabase
           .from("story_view_counts")
-          .select("story_id,views")
-          .eq("story_id", (storyRow as StoryRow).id)
-          .maybeSingle<{ story_id: string; views: number }>();
+          .select("views")
+          .eq("story_id", storyRow.id)
+          .maybeSingle();
+        const viewsValue = viewCountData?.views ?? 0;
 
-        setStory({ ...withAuthor, comments_count: totalComments ?? 0, likes: likeCount?.likes ?? 0, is_liked: isLiked, views: viewCount?.views ?? 0 });
-
-        // Record view for logged-in users (ignore errors/duplicates)
-        if (auth.user) {
-          try {
-            await supabase.from("story_views").insert({ story_id: (storyRow as StoryRow).id, user_id: auth.user.id });
-            setStory((prev) => prev ? { ...prev, views: prev.views + 1 } : prev);
-          } catch {
-            // ignore
+        // Saved state (gracefully ignore if table is missing)
+        let isSaved = false;
+        try {
+          if (auth.user) {
+            const { data: mineSave } = await supabase
+              .from("story_saves")
+              .select("story_id")
+              .eq("story_id", storyRow.id)
+              .eq("user_id", auth.user.id)
+              .maybeSingle();
+            isSaved = !!mineSave;
+          }
+        } catch (e: unknown) {
+          if (typeof e === "object" && e !== null && "code" in e && (e as { code?: string }).code !== "42P01") {
+            console.debug("Load saved failed:", e);
           }
         }
 
+        setStory({
+          ...withAuthor,
+          comments_count: totalComments ?? 0,
+          likes: likesValue,
+          is_liked: isLiked,
+          views: viewsValue,
+          is_saved: isSaved,
+        });
+
+        // Record unique view for logged-in users (author's views do not count)
+        if (auth.user && auth.user.id !== storyRow.author_id) {
+          try {
+            await supabase.from("story_views").insert({ story_id: storyRow.id }); // user_id default = auth.uid()
+          } catch (e: unknown) {
+            // ignore duplicates or missing perms
+            if (typeof e === "object" && e !== null && "code" in e && (e as { code?: string }).code !== "23505") {
+              console.debug("view insert failed:", e);
+            }
+          }
+        }
+
+        // First page of comments
         const first = await fetchComments(storyRow.id, 1);
         setComments(first.rows);
         setHasMore(ITEMS_PER_PAGE < first.total);
         setPage(1);
 
+        // Realtime subscriptions
         storyChannel = supabase
           .channel(`story-${storyRow.id}`)
+          // current user like status
           .on(
-            'postgres_changes',
-            {
-              event: "UPDATE",
-              schema: "public",
-              table: "stories",
-              filter: `id=eq.${storyRow.id}`,
-            },
-            (payload: { new: Partial<StoryRow> }) => {
-              const row = payload.new;
-              if (!row) return;
-              setStory((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      title: row.title ?? prev.title,
-                      content: row.content ?? prev.content,
-                      full_content: row.content ?? prev.full_content,
-                      tags: Array.isArray(row.tags) ? (row.tags as string[]) : prev.tags,
-                    }
-                  : prev
-              );
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "story_likes", filter: `story_id=eq.${storyRow.id}` },
+            (payload) => {
+              if (
+                payload.new &&
+                "user_id" in payload.new &&
+                (payload.new as { user_id?: string }).user_id === auth.user?.id
+              ) {
+                setStory((s) => (s ? { ...s, is_liked: true } : s));
+              }
             }
           )
-          .subscribe((status) => {
-            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
-              console.error(`Story channel status: ${status}`);
+          .on(
+            "postgres_changes",
+            { event: "DELETE", schema: "public", table: "story_likes", filter: `story_id=eq.${storyRow.id}` },
+            (payload) => {
+              if (payload.old && "user_id" in payload.old && (payload.old as { user_id?: string }).user_id === auth.user?.id) {
+                setStory((s) => (s ? { ...s, is_liked: false } : s));
+              }
             }
-          });
+          )
+          // aggregate like count
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "story_like_counts", filter: `story_id=eq.${storyRow.id}` },
+            (payload: RealtimePostgresChangesPayload<{ likes?: number }>) => {
+              let likes = 0;
+              const newRow = payload.new as unknown;
+              if (newRow && typeof newRow === "object" && "likes" in newRow) {
+                const v = (newRow as { likes?: number }).likes;
+                likes = typeof v === "number" ? v : 0;
+              }
+              setStory((s) => (s ? { ...s, likes } : s));
+            }
+          )
+          // aggregate view count
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "story_view_counts", filter: `story_id=eq.${storyRow.id}` },
+            (payload: RealtimePostgresChangesPayload<{ views?: number }>) => {
+              let views = 0;
+              const newRow = payload.new as unknown;
+              if (newRow && typeof newRow === "object" && "views" in newRow) {
+                const v = (newRow as { views?: number }).views;
+                views = typeof v === "number" ? v : 0;
+              }
+              setStory((s) => (s ? { ...s, views } : s));
+            }
+          )
+          .subscribe();
 
         commentsChannel = supabase
           .channel(`comments-${storyRow.id}`)
           .on(
-            'postgres_changes',
-            { event: 'INSERT', schema: 'public', table: 'comments', filter: `story_id=eq.${storyRow.id}` },
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "comments", filter: `story_id=eq.${storyRow.id}` },
             async () => {
-              const refreshed = await fetchComments(storyRow.id, 1);
+              const refreshed = await fetchComments(storyRow!.id, 1);
               setComments(refreshed.rows);
               setHasMore(ITEMS_PER_PAGE < refreshed.total);
               setPage(1);
@@ -350,45 +441,17 @@ export default function Story() {
             }
           )
           .on(
-            'postgres_changes',
-            { event: 'DELETE', schema: 'public', table: 'comments', filter: `story_id=eq.${storyRow.id}` },
+            "postgres_changes",
+            { event: "DELETE", schema: "public", table: "comments", filter: `story_id=eq.${storyRow.id}` },
             async () => {
-              const refreshed = await fetchComments(storyRow.id, 1);
+              const refreshed = await fetchComments(storyRow!.id, 1);
               setComments(refreshed.rows);
               setHasMore(ITEMS_PER_PAGE < refreshed.total);
               setPage(1);
               setStory((prev) => (prev ? { ...prev, comments_count: refreshed.total } : prev));
             }
           )
-          .subscribe((status) => {
-            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
-              console.error(`Comments channel status: ${status}`);
-            }
-          });
-
-        countsChannel = supabase
-          .channel(`story-counts-${storyRow.id}`)
-          .on(
-            'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'story_like_counts', filter: `story_id=eq.${storyRow.id}` },
-            (payload: { new: { story_id: string; likes?: number; count?: number } }) => {
-              const likes = (payload.new?.likes ?? payload.new?.count ?? null) as number | null;
-              if (likes != null) setStory((prev) => (prev ? { ...prev, likes } : prev));
-            }
-          )
-          .on(
-            'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'story_view_counts', filter: `story_id=eq.${storyRow.id}` },
-            (payload: { new: { story_id: string; views?: number; count?: number } }) => {
-              const views = payload.new?.views ?? payload.new?.count ?? null;
-              if (views != null) setStory((prev) => (prev ? { ...prev, views } : prev));
-            }
-          )
-          .subscribe((status) => {
-            if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
-              console.error(`Counts channel status: ${status}`);
-            }
-          });
+          .subscribe();
 
         setLoading(false);
       } catch (e) {
@@ -403,9 +466,10 @@ export default function Story() {
     return () => {
       storyChannel?.unsubscribe();
       commentsChannel?.unsubscribe();
-      countsChannel?.unsubscribe();
     };
   }, [idParam, fetchComments]);
+
+  /* ---------------------------- Handlers ---------------------------- */
 
   const handleLoadMore = async () => {
     if (!story || loadingMore) return;
@@ -436,17 +500,18 @@ export default function Story() {
 
       const nextLiked = !story.is_liked;
       // optimistic update
-      setStory((s) => s ? { ...s, is_liked: nextLiked, likes: Math.max(0, s.likes + (nextLiked ? 1 : -1)) } : s);
+      setStory((s) => (s ? { ...s, is_liked: nextLiked, likes: Math.max(0, s.likes + (nextLiked ? 1 : -1)) } : s));
 
       if (nextLiked) {
-        const { data: { user } } = await supabase.auth.getUser();
-        const { error } = await supabase
-          .from("story_likes")
-          .insert([{ story_id: story.id, user_id: user!.id }]);
+        const { error } = await supabase.from("story_likes").insert([{ story_id: story.id }]); // user_id default = auth.uid()
         if (error && (error as { code?: string }).code !== "23505") {
           // rollback
-          setStory((s) => s ? { ...s, is_liked: false, likes: Math.max(0, s.likes - 1) } : s);
-          const msg = (error as PostgrestError)?.message || (error as PostgrestError)?.hint || (error as PostgrestError)?.details || "Like failed.";
+          setStory((s) => (s ? { ...s, is_liked: false, likes: Math.max(0, s.likes - 1) } : s));
+          const msg =
+            (error as PostgrestError)?.message ||
+            (error as PostgrestError)?.hint ||
+            (error as PostgrestError)?.details ||
+            "Like failed.";
           toast.error("Like failed", { description: msg });
         }
       } else {
@@ -457,7 +522,7 @@ export default function Story() {
           .eq("user_id", user.id);
         if (error) {
           // rollback
-          setStory((s) => s ? { ...s, is_liked: true, likes: s.likes + 1 } : s);
+          setStory((s) => (s ? { ...s, is_liked: true, likes: s.likes + 1 } : s));
           const msg =
             (error as PostgrestError)?.message ||
             (error as PostgrestError)?.hint ||
@@ -468,6 +533,41 @@ export default function Story() {
       }
     } catch (e) {
       console.error("Like toggle error:", e);
+    }
+  };
+
+  const handleToggleSave = async () => {
+    if (!story) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast.error("Login required.");
+      navigate("/auth/login");
+      return;
+    }
+
+    const currentlySaved = !!story.is_saved;
+    setSaveLoading(true);
+
+    try {
+      if (!currentlySaved) {
+        await supabase.from("story_saves").insert({ story_id: story.id }); // user_id default = auth.uid()
+        setStory((s) => (s ? { ...s, is_saved: true } : s));
+      } else {
+        await supabase.from("story_saves").delete().eq("story_id", story.id).eq("user_id", user.id);
+        setStory((s) => (s ? { ...s, is_saved: false } : s));
+      }
+    } catch (e: unknown) {
+      if (typeof e === "object" && e !== null && "code" in e) {
+        if ((e as { code?: string }).code === "42P01") {
+          toast.error("Saving not set up yet (missing story_saves table).");
+        } else if ((e as { code?: string }).code !== "23505") {
+          toast.error((e as { message?: string }).message || "Failed to update saved state.");
+        }
+      } else {
+        toast.error("Failed to update saved state.");
+      }
+    } finally {
+      setSaveLoading(false);
     }
   };
 
@@ -523,7 +623,7 @@ export default function Story() {
       if (error) throw error;
 
       // fetch current user's profile for name/avatar
-      let authorName = "User";
+      let authorName = "Anonymous";
       let authorAvatar: string | null = null;
       const { data: me } = await supabase
         .from("community_members")
@@ -531,7 +631,7 @@ export default function Story() {
         .eq("user_id", auth.user.id)
         .maybeSingle<{ name: string | null; avatar_url: string | null }>();
       if (me) {
-        authorName = me.name || "User";
+        authorName = me.name || "Anonymous";
         authorAvatar = me.avatar_url ?? null;
       }
 
@@ -546,9 +646,7 @@ export default function Story() {
         },
         ...prev,
       ]);
-      setStory((prev) =>
-        prev ? { ...prev, comments_count: prev.comments_count + 1 } : prev
-      );
+      setStory((prev) => (prev ? { ...prev, comments_count: prev.comments_count + 1 } : prev));
       setNewComment("");
       setCommentError(null);
       toast.success("Comment added.");
@@ -565,24 +663,23 @@ export default function Story() {
     if (!story) return;
     try {
       await supabase.from("comments").delete().eq("id", commentId);
-
+      // optimistic update
       setComments((prev) => prev.filter((c) => c.id !== commentId));
-      setStory((prev) =>
-        prev ? { ...prev, comments_count: Math.max(0, prev.comments_count - 1) } : prev
-      );
+      setStory((prev) => (prev ? { ...prev, comments_count: Math.max(0, prev.comments_count - 1) } : prev));
       toast.success("Comment deleted.");
     } catch (e) {
-      console.error("Error deleting comment:", e);
+      console.error("Delete comment failed:", e);
       toast.error("Failed to delete comment.");
     }
   };
+
+  /* ------------------------------ Related ------------------------------ */
 
   useEffect(() => {
     if (!story?.id || !story?.tags?.length) {
       setRelated([]);
       return;
     }
-
     let isActive = true;
 
     const loadRelated = async () => {
@@ -609,18 +706,19 @@ export default function Story() {
     };
 
     void loadRelated();
-
     return () => {
       isActive = false;
     };
   }, [story?.id, story?.tags]);
+
+  /* ------------------------------- Render ------------------------------ */
 
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
         <main className="container mx-auto px-4 py-8">
-          <div className="max-w-4xl mx-auto text-center">
+          <div className="max-w-4xl mx-auto min-h-[60vh] flex items-center justify-center">
             <Loading />
           </div>
         </main>
@@ -635,13 +733,15 @@ export default function Story() {
         <Navbar />
         <main className="container mx-auto px-4 py-8">
           <div className="max-w-4xl mx-auto text-center">
-            <h1 className="text-2xl font-bold text-foreground mb-4">Story not found</h1>
-            <Button asChild>
-              <Link to="/stories" aria-label="Back to stories">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Stories
-              </Link>
-            </Button>
+            <p className="text-muted-foreground">Story not found.</p>
+            <div className="mt-4">
+              <Button variant="ghost" asChild>
+                <Link to="/stories" aria-label="Back to stories">
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Back to Stories
+                </Link>
+              </Button>
+            </div>
           </div>
         </main>
         <Footer />
@@ -649,393 +749,407 @@ export default function Story() {
     );
   }
 
-  // derive simple markdown-like headings for TOC
-  const toc = useMemo(() => {
-    const src = (story?.full_content || story?.content || "").split(/\n+/);
-    const items: Array<{ level: 1 | 2 | 3; text: string; id: string }> = [];
-    const slug = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
-    for (const line of src) {
-      const t = line.trim();
-      if (t.startsWith("### ")) items.push({ level: 3, text: t.slice(4), id: slug(t.slice(4)) });
-      else if (t.startsWith("## ")) items.push({ level: 2, text: t.slice(3), id: slug(t.slice(3)) });
-      else if (t.startsWith("# ")) items.push({ level: 1, text: t.slice(2), id: slug(t.slice(2)) });
-    }
-    return items;
-  }, [story?.full_content, story?.content]);
-  const { prefs } = usePreferences();
-
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-gradient-to-b from-background to-background/95 antialiased">
       <ReadingProgress target="#story-content" />
       <Navbar />
-      <main id="main" className="relative container mx-auto px-4 py-10">
-        <div className="max-w-4xl mx-auto mb-6">
-          <Button variant="ghost" asChild>
-            <Link to="/stories" className="mb-4" aria-label="Back to stories">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Stories
-            </Link>
-          </Button>
-        </div>
-
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-8">
-          <div id="story-content" className="max-w-4xl w-full">
-          {contentWarnings.length > 0 && prefs.privacy.contentWarnings !== "hide" && (
-            <Card className="mb-4 border-destructive/20 bg-destructive/5">
-              <CardHeader>
-                <CardTitle className="text-sm text-destructive">Content warning</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">{contentWarnings.join(", ")}</p>
-              </CardContent>
-            </Card>
-          )}
-          <Card className="mb-8 rounded-xl shadow-sm">
-            <CardHeader>
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  {story.author.avatar ? (
-                    <Avatar className="h-12 w-12">
-                      <AvatarImage src={story.author.avatar} alt={story.author.name} />
-                      <AvatarFallback>
-                        <User className="h-6 w-6" />
-                      </AvatarFallback>
-                    </Avatar>
-                  ) : (
-                    <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
-                      {story.author.anonymous ? (
-                        <Shield className="h-6 w-6" />
-                      ) : (
-                        <User className="h-6 w-6" />
-                      )}
-                    </div>
-                  )}
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <p className="font-semibold flex items-center gap-1">
-                        {story.author.name}
-                        {story.author.verified && (
-                          <Badge variant="secondary" className="inline-flex items-center gap-1 px-1.5 py-0 text-[10px]">
-                            <BadgeCheck className="h-3 w-3 text-primary" />
-                            Verified
-                          </Badge>
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-                      <Clock className="h-4 w-4" />
-                      <span>
-                        {formatDistanceToNow(parseISO(story.created_at), {
-                          addSuffix: true,
-                        })}
-                      </span>
-                      <span>• {readingMinutes} min read</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Badge variant="outline">
-                    {String(story.category).replace("-", " ")}
-                  </Badge>
-                  {story.tags.some(
-                    (tag) =>
-                      ["trigger", "sensitive"].includes(
-                        tag?.toLowerCase?.() ?? ""
-                      )
-                  ) && (
-                    <Badge variant="secondary" className="flex items-center gap-1">
-                      <AlertTriangle className="h-3 w-3" />
-                      Content Warning
-                    </Badge>
-                  )}
-                </div>
-              </div>
-              <CardTitle className="text-3xl mb-4">
-                {story.title?.trim() || (story.content ? String(story.content).slice(0, 60) + "..." : "Untitled story")}
-              </CardTitle>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {story.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-xs">
-                    #{String(tag).replace("-", "")}
-                  </Badge>
-                ))}
-              </div>
-              <div className="flex items-center space-x-6 text-sm text-muted-foreground">
-                <div className="flex items-center space-x-1">
-                  <Heart
-                    className={`h-4 w-4 ${
-                      story.is_liked ? "fill-red-500 text-red-500" : ""
-                    }`}
-                  />
-                  <span>{story.likes}</span>
-                </div>
-                <div className="flex items-center space-x-1">
-                  <MessageCircle className="h-4 w-4" />
-                  <span>{story.comments_count}</span>
-                </div>
-                <div className="flex items-center space-x-1">
-                  <BookOpen className="h-4 w-4" />
-                  <span>
-                    {Math.max(
-                      1,
-                      Math.ceil(
-                        (story.full_content?.length ?? story.content.length) /
-                          1000
-                      )
-                    )}{" "}
-                    min read
-                  </span>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="prose prose-neutral dark:prose-invert max-w-none">
-              <div className="prose prose-lg max-w-none mb-8">
-                {(story.full_content || story.content)
-                  .split("\n\n")
-                  .map((block, index) => {
-                    const t = block.trim();
-                    if (t.startsWith("### ")) {
-                      const text = t.slice(4);
-                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
-                      return (
-                        <h3 id={id} key={index} className="scroll-mt-20">
-                          {text}
-                        </h3>
-                      );
-                    }
-                    if (t.startsWith("## ")) {
-                      const text = t.slice(3);
-                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
-                      return (
-                        <h2 id={id} key={index} className="scroll-mt-20">
-                          {text}
-                        </h2>
-                      );
-                    }
-                    if (t.startsWith("# ")) {
-                      const text = t.slice(2);
-                      const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0,60);
-                      return (
-                        <h1 id={id} key={index} className="scroll-mt-20">
-                          {text}
-                        </h1>
-                      );
-                    }
-                    return (
-                      <p
-                        key={index}
-                        className="mb-4 leading-relaxed text-foreground animate-fade-in-up"
-                        style={{ animationDelay: `${Math.min(index, 12) * 60}ms` }}
-                      >
-                        {block}
-                      </p>
-                    );
-                  })}
-              </div>
-              <div className="flex items-center justify-between pt-6 border-t">
-                <div className="flex space-x-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleLike}
-                    className="flex items-center space-x-2 bg-transparent"
-                    aria-label={
-                      story.is_liked ? `Unlike ${story.title}` : `Like ${story.title}`
-                    }
-                  >
-                    <ThumbsUp
-                      className={`h-4 w-4 ${
-                        story.is_liked ? "fill-blue-500 text-blue-500" : ""
-                      }`}
-                    />
-                    <span>{story.is_liked ? "Liked" : "Like"}</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleShare}
-                    className="flex items-center space-x-2 bg-transparent"
-                    aria-label={`Share ${story.title}`}
-                  >
-                    <Share2 className="h-4 w-4" />
-                    <span>Share</span>
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <MessageCircle className="h-5 w-5" />
-                <span>Comments ({comments.length})</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex space-x-3 mb-6">
-                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                  <User className="h-4 w-4" />
-                </div>
-                <div className="flex-1 flex flex-col space-y-2">
-                  <div className="flex space-x-2">
-                    <Input
-                      placeholder="Add a thoughtful comment..."
-                      value={newComment}
-                      onChange={(e) => {
-                        setNewComment(e.target.value);
-                        setCommentError(null);
-                      }}
-                      className="flex-1"
-                      aria-invalid={!!commentError}
-                      aria-describedby={commentError ? "comment-error" : undefined}
-                      maxLength={500}
-                    />
-                    <Button
-                      onClick={handleAddComment}
-                      disabled={!newComment.trim() || commentLoading}
-                      aria-label="Submit comment"
-                    >
-                      {commentLoading ? "Posting..." : "Post"}
-                    </Button>
-                  </div>
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{newComment.length}/500</span>
-                    {commentError && (
-                      <p id="comment-error" className="text-red-500">
-                        {commentError}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {comments.map((comment) => (
-                  <div key={comment.id} className="flex space-x-3">
-                    {comment.author_avatar ? (
-                      <Avatar className="h-8 w-8">
-                        <AvatarImage src={comment.author_avatar} alt={comment.author_name} />
-                        <AvatarFallback>{(comment.author_name || 'U').slice(0,1)}</AvatarFallback>
-                      </Avatar>
-                    ) : (
-                      <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                        <User className="h-4 w-4" />
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-1">
-                        <span className="font-medium text-sm">{comment.author_name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {formatDistanceToNow(parseISO(comment.created_at), {
-                            addSuffix: true,
-                          })}
-                        </span>
-                        {isAdmin && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteComment(comment.id)}
-                            aria-label={`Delete comment by ${comment.author_name}`}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        )}
-                      </div>
-                      <p className="text-sm text-muted-foreground leading-relaxed">
-                        {comment.content}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-
-                {comments.length === 0 && (
-                  <div className="text-center py-8">
-                    <MessageCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <h3 className="text-lg font-semibold text-foreground mb-2">
-                      No comments yet
-                    </h3>
-                    <p className="text-muted-foreground">
-                      Be the first to share your thoughts on this story.
-                    </p>
-                  </div>
-                )}
-
-                {hasMore && comments.length > 0 && (
-                  <div className="text-center mt-6">
-                    <Button
-                      onClick={handleLoadMore}
-                      disabled={loadingMore}
-                      aria-label="Load more comments"
-                    >
-                      {loadingMore ? "Loading..." : "Load More Comments"}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {related.length > 0 && (
-            <Card className="mt-8">
-              <CardHeader>
-                <CardTitle className="text-base">Related Stories</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-2">
-                  {related.map((r) => (
-                    <Button key={r.id} asChild variant="outline" size="sm" className="justify-start">
-                      <Link to={`/stories/${r.id}`}>{r.title}</Link>
-                    </Button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          <Card className="mt-8 border-primary/20 bg-primary/5">
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2 text-primary">
-                <Shield className="h-5 w-5" />
-                <span>Community Guidelines</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Keep comments respectful and supportive. Harmful content will be removed.
-              </p>
-            </CardContent>
-          </Card>
+      <main
+        id="main"
+        className="relative container mx-auto px-4 sm:px-6 lg:px-8 min-h-screen flex items-center justify-center">
+        <div className="max-w-7xl w-full py-8">
+          <div className="mb-8 ml-5">
+            <Button
+              variant="ghost"
+              asChild
+              className="text-sm font-medium text-primary hover:bg-primary/10 rounded-full px-3 py-2 transition-colors duration-200"
+            >
+              <Link to="/stories" aria-label="Back to stories">
+                <ArrowLeft className="h-5 w-5 mr-2" />
+                Back to Stories
+              </Link>
+            </Button>
           </div>
 
-          {/* Table of contents */}
-          {toc.length >= 3 && (
-            <div className="hidden lg:block">
-              <Card className="sticky top-24 max-h-[70vh]">
-                <CardHeader>
-                  <CardTitle className="text-sm">Table of contents</CardTitle>
+          <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 lg:gap-10">
+            <div id="story-content" className="max-w-4xl w-full">
+              {/* Content warning */}
+              {contentWarnings.length > 0 && prefs.privacy.contentWarnings !== "hide" && (
+                <Card className="mb-8 rounded-2xl border-destructive/20 bg-destructive/5 shadow-sm transition-all duration-200">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold text-destructive flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      Content Warning
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {contentWarnings.join(", ")}
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Story */}
+              <Card className="mb-4 sm:mb-6 md:mb-10 rounded-2xl bg-card shadow-md transition-all duration-300 hover:shadow-lg max-w-full mx-2 sm:mx-4 md:mx-auto">
+                <CardHeader className="px-4 sm:px-6 pb-4">
+                  <div className="flex flex-col sm:flex-row items-start justify-between mb-4 sm:mb-6">
+                    <div className="flex items-center space-x-3 sm:space-x-4 w-full sm:w-auto">
+                      {story.author.avatar ? (
+                        <Avatar className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 border-2 border-border ring-2 ring-primary/10 shadow-sm transition-transform duration-200 hover:scale-105">
+                          <AvatarImage src={story.author.avatar} alt={story.author.name} />
+                          <AvatarFallback className="text-xs sm:text-sm font-semibold bg-muted">
+                            {(story.author.name || "U").slice(0, 1)}
+                          </AvatarFallback>
+                        </Avatar>
+                      ) : (
+                        <div className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 rounded-full bg-muted flex items-center justify-center border-2 border-border ring-2 ring-primary/10 shadow-sm transition-transform duration-200 hover:scale-105">
+                          {story.author.anonymous ? (
+                            <Shield className="h-5 w-5 sm:h-6 sm:w-6 md:h-7 md:w-7 text-muted-foreground" />
+                          ) : (
+                            <User className="h-5 w-5 sm:h-6 sm:w-6 md:h-7 md:w-7 text-muted-foreground" />
+                          )}
+                        </div>
+                      )}
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2 flex-wrap">
+                          <p className="font-semibold text-lg sm:text-xl md:text-2xl text-foreground truncate">
+                            {story.author.name}
+                            {story.author.verified && (
+                              <Badge
+                                variant="secondary"
+                                className="ml-2 inline-flex items-center gap-1 px-2 sm:px-2.5 py-0.5 text-xs bg-blue-100 text-blue-600 rounded-full"
+                              >
+                                <BadgeCheck className="h-3 w-3 sm:h-4 sm:w-4" />
+                                Verified
+                              </Badge>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex items-center space-x-2 text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-1.5">
+                          <Clock className="h-3 w-3 sm:h-4 sm:w-4" />
+                          <span>{formatDistanceToNow(parseISO(story.created_at), { addSuffix: true })}</span>
+                          <span className="hidden sm:inline">· {readingMinutes} min read</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 mt-3 sm:mt-0 flex-wrap">
+                      <Badge
+                        variant="outline"
+                        className="text-xs font-medium border-primary/20 bg-primary/5 text-primary capitalize px-2 sm:px-3 py-1 sm:py-1.5 rounded-full"
+                      >
+                        {String(story.category).replace("-", " ")}
+                      </Badge>
+                      {story.tags.some((tag) => ["trigger", "sensitive"].includes(tag?.toLowerCase?.() ?? "")) && (
+                        <Badge
+                          variant="secondary"
+                          className="flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 text-xs bg-destructive/10 text-destructive rounded-full"
+                        >
+                          <AlertTriangle className="h-3 w-3 sm:h-4 sm:w-4" />
+                          Sensitive Content
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  <CardTitle className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-foreground mb-3 sm:mb-4 line-clamp-2">
+                    {story.title?.trim() || (story.content ? String(story.content).slice(0, 60) + "..." : "Untitled story")}
+                  </CardTitle>
+
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-4 sm:mb-6">
+                    {story.tags.map((tag) => (
+                      <Badge
+                        key={tag}
+                        variant="secondary"
+                        className="text-xs bg-muted/50 text-muted-foreground px-2 sm:px-3 py-1 sm:py-1.5 rounded-full hover:bg-muted/80 transition-colors duration-200"
+                      >
+                        #{String(tag).replace("-", "")}
+                      </Badge>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center space-x-4 sm:space-x-6 text-xs sm:text-sm text-muted-foreground border-t pt-3 sm:pt-4">
+                    <div className="flex items-center space-x-1 sm:space-x-2">
+                      <Heart
+                        className={`h-5 w-5 sm:h-6 sm:w-6 transition-colors duration-200 ${story.is_liked ? "fill-red-500 text-red-500" : "text-muted-foreground"}`}
+                      />
+                      <span>{story.likes}</span>
+                    </div>
+                    <div className="flex items-center space-x-1 sm:space-x-2">
+                      <MessageCircle className="h-5 w-5 sm:h-6 sm:w-6 text-muted-foreground" />
+                      <span>{story.comments_count}</span>
+                    </div>
+                    <div className="flex items-center space-x-1 sm:space-x-2 sm:flex">
+                      <BookOpen className="h-5 w-5 sm:h-6 sm:w-6 text-muted-foreground" />
+                      <span>{readingMinutes} min read</span>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="prose prose-neutral dark:prose-invert max-w-none px-4 sm:px-6">
+                  <div className="prose prose-sm sm:prose-base md:prose-lg max-w-none mb-8 sm:mb-12">
+                    {(story.full_content || story.content)
+                      .split("\n\n")
+                      .map((block, index) => {
+                        const t = block.trim();
+                        if (t.startsWith("### ")) {
+                          const text = t.slice(4);
+                          const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
+                          return (
+                            <h3 id={id} key={index} className="scroll-mt-20 text-lg sm:text-xl md:text-2xl font-semibold text-foreground mt-4 sm:mt-6">
+                              {text}
+                            </h3>
+                          );
+                        }
+                        if (t.startsWith("## ")) {
+                          const text = t.slice(3);
+                          const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
+                          return (
+                            <h2 id={id} key={index} className="scroll-mt-20 text-xl sm:text-2xl md:text-3xl font-bold text-foreground mt-6 sm:mt-8">
+                              {text}
+                            </h2>
+                          );
+                        }
+                        if (t.startsWith("# ")) {
+                          const text = t.slice(2);
+                          const id = text.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").slice(0, 60);
+                          return (
+                            <h1 id={id} key={index} className="scroll-mt-20 text-2xl sm:text-3xl md:text-4xl font-bold text-foreground mt-8 sm:mt-10">
+                              {text}
+                            </h1>
+                          );
+                        }
+                        return (
+                          <p
+                            key={index}
+                            className="mb-4 sm:mb-6 leading-relaxed text-foreground animate-fade-in-up"
+                            style={{ animationDelay: `${Math.min(index, 12) * 100}ms` }}
+                          >
+                            {block}
+                          </p>
+                        );
+                      })}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-4 sm:pt-6 border-t border-border/30">
+                    <div className="flex flex-wrap gap-2 sm:gap-4">
+                      <Button
+                        variant="outline"
+                        onClick={handleLike}
+                        className="flex items-center space-x-1 sm:space-x-2 bg-transparent border-primary/30 hover:bg-primary/10 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-foreground transition-colors duration-200"
+                        aria-label={story.is_liked ? `Unlike ${story.title}` : `Like ${story.title}`}
+                      >
+                        <ThumbsUp
+                          className={`h-4 w-4 sm:h-5 sm:w-5 ${story.is_liked ? "fill-blue-600 text-blue-600" : "text-muted-foreground"}`}
+                        />
+                        <span>{story.is_liked ? "Liked" : "Like"} ({story.likes})</span>
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        onClick={handleShare}
+                        className="flex items-center space-x-1 sm:space-x-2 bg-transparent border-primary/30 hover:bg-primary/10 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-foreground transition-colors duration-200"
+                        aria-label={`Share ${story.title}`}
+                      >
+                        <Share2 className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
+                        <span>Share</span>
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        onClick={handleToggleSave}
+                        disabled={saveLoading}
+                        className="flex items-center space-x-1 sm:space-x-2 bg-transparent border-primary/30 hover:bg-primary/10 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-foreground transition-colors duration-200"
+                        aria-label={story.is_saved ? `Unsave ${story.title}` : `Save ${story.title}`}
+                      >
+                        <Bookmark
+                          className={`h-4 w-4 sm:h-5 sm:w-5 ${story.is_saved ? "fill-yellow-500 text-yellow-500" : "text-muted-foreground"}`}
+                        />
+                        <span>{story.is_saved ? "Saved" : "Save"}</span>
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Comments */}
+              <Card className="rounded-2xl bg-card shadow-md">
+                <CardHeader className="pb-4">
+                  <CardTitle className="flex items-center space-x-2 text-lg font-semibold text-foreground">
+                    <MessageCircle className="h-5 w-5 text-primary" />
+                    <span>Comments ({story.comments_count})</span>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[50vh] pr-2">
-                    <nav aria-label="Table of contents" className="space-y-1 text-sm">
-                      {toc.map((h, i) => (
-                        <a
-                          key={`${h.id}-${i}`}
-                          href={`#${h.id}`}
-                          className={`block rounded px-2 py-1 hover:bg-muted transition ${
-                            h.level === 1 ? "font-semibold" : h.level === 2 ? "ml-2" : "ml-4 text-muted-foreground"
-                          }`}
+                  <div className="flex space-x-3 mb-8">
+                    <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center border border-border/50">
+                      <User className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 flex flex-col space-y-3">
+                      <div className="flex space-x-3">
+                        <Input
+                          placeholder="Write a comment..."
+                          value={newComment}
+                          onChange={(e) => {
+                            setNewComment(e.target.value);
+                            setCommentError(null);
+                          }}
+                          className="flex-1 rounded-full border-border/50 bg-background text-foreground placeholder-muted-foreground focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-all duration-200"
+                          aria-invalid={!!commentError}
+                          aria-describedby={commentError ? "comment-error" : undefined}
+                          maxLength={500}
+                        />
+                        <Button
+                          onClick={handleAddComment}
+                          disabled={!newComment.trim() || commentLoading}
+                          aria-label="Submit comment"
+                          className="rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors duration-200"
                         >
-                          {h.text}
-                        </a>
+                          {commentLoading ? "Posting..." : "Post"}
+                        </Button>
+                      </div>
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>{newComment.length}/500</span>
+                        {commentError && (
+                          <p id="comment-error" className="text-red-500">
+                            {commentError}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    {comments.map((comment) => (
+                      <div key={comment.id} className="flex space-x-3 group">
+                        {comment.author_avatar ? (
+                          <Avatar className="h-10 w-10 border border-border/50 ring-1 ring-primary/10 transition-transform duration-200 group-hover:scale-105">
+                            <AvatarImage src={comment.author_avatar} alt={comment.author_name} />
+                            <AvatarFallback className="text-xs font-semibold bg-muted/50">
+                              {(comment.author_name || "U").slice(0, 1)}
+                            </AvatarFallback>
+                          </Avatar>
+                        ) : (
+                          <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center border border-border/50 transition-transform duration-200 group-hover:scale-105">
+                            <User className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                        )}
+                        <div className="flex-1 bg-muted/30 rounded-lg p-3 transition-all duration-200 group-hover:bg-muted/50">
+                          <div className="flex items-center space-x-2 mb-1.5">
+                            <span className="font-medium text-sm text-foreground">{comment.author_name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatDistanceToNow(parseISO(comment.created_at), { addSuffix: true })}
+                            </span>
+                            {isAdmin && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteComment(comment.id)}
+                                aria-label={`Delete comment by ${comment.author_name}`}
+                                className="p-1 hover:bg-red-100 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                              >
+                                <Trash2 className="h-4 w-4 text-red-500" />
+                              </Button>
+                            )}
+                          </div>
+                          <p className="text-sm text-foreground leading-relaxed">{comment.content}</p>
+                        </div>
+                      </div>
+                    ))}
+
+                    {comments.length === 0 && (
+                      <div className="text-center py-12">
+                        <MessageCircle className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold text-foreground mb-2">No comments yet</h3>
+                        <p className="text-sm text-muted-foreground">Be the first to share your thoughts!</p>
+                      </div>
+                    )}
+
+                    {hasMore && comments.length > 0 && (
+                      <div className="text-center mt-8">
+                        <Button
+                          onClick={handleLoadMore}
+                          disabled={loadingMore}
+                          aria-label="Load more comments"
+                          className="rounded-full bg-primary/10 text-primary px-4 py-2 text-sm font-medium hover:bg-primary/20 transition-colors duration-200"
+                        >
+                          {loadingMore ? "Loading..." : "Load More"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Related Stories */}
+              {related.length > 0 && (
+                <Card className="mt-8 rounded-2xl bg-card shadow-md">
+                  <CardHeader className="pb-4">
+                    <CardTitle className="text-lg font-semibold text-foreground">Related Stories</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-3">
+                      {related.map((r) => (
+                        <Button
+                          key={r.id}
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className="justify-start text-left text-sm font-medium text-foreground hover:bg-primary/10 rounded-lg transition-colors duration-200"
+                        >
+                          <Link to={`/stories/${r.id}`}>{r.title}</Link>
+                        </Button>
                       ))}
-                    </nav>
-                  </ScrollArea>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Community Guidelines */}
+              <Card className="mt-8 rounded-2xl border-primary/20 bg-primary/5 shadow-sm">
+                <CardHeader className="pb-4">
+                  <CardTitle className="flex items-center space-x-2 text-lg font-semibold text-primary">
+                    <Shield className="h-5 w-5" />
+                    <span>Community Guidelines</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Keep comments respectful and supportive. Harmful content will be removed.
+                  </p>
                 </CardContent>
               </Card>
             </div>
-          )}
+
+            {/* Table of Contents */}
+            {toc.length >= 3 && (
+              <div className="hidden lg:block">
+                <Card className="sticky top-24 max-h-[70vh] rounded-2xl bg-card shadow-md">
+                  <CardHeader className="pb-4">
+                    <CardTitle className="text-sm font-semibold text-foreground">Table of Contents</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ScrollArea className="h-[50vh] pr-4">
+                      <nav aria-label="Table of contents" className="space-y-2 text-sm">
+                        {toc.map((h, i) => (
+                          <a
+                            key={`${h.id}-${i}`}
+                            href={`#${h.id}`}
+                            className={`block rounded-lg px-3 py-2 hover:bg-primary/10 transition-colors duration-200 ${h.level === 1 ? "font-semibold" : h.level === 2 ? "ml-3" : "ml-6 text-muted-foreground"
+                              }`}
+                          >
+                            {h.text}
+                          </a>
+                        ))}
+                      </nav>
+                    </ScrollArea>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </div>
         </div>
       </main>
-      <LiveChat/>
+      <LiveChat />
       <Footer />
     </div>
   );

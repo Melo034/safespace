@@ -1,3 +1,4 @@
+// StoryCard.tsx — aligned with your Supabase schema & RLS policies
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import supabase from "@/server/supabase";
@@ -9,18 +10,27 @@ import { toast } from "sonner";
 import type { Story } from "@/lib/types";
 
 type StoryCardProps = {
-  story?: Story;
-  storyId?: string;
+  story?: Story;      // full story object (optional)
+  storyId?: string;   // or just pass an id and we'll fetch
 };
 
 type StoryRow = {
   id: string;
-  title?: string | null;
-  content?: string | null;
-  author_id?: string | null;
-  created_at?: string | null;
-  tags?: string[] | null;
+  title: string | null;
+  content: string | null;
+  author_id: string | null;
+  created_at: string | null;
+  tags: string[] | null;
+  status?: string | null; // may not exist on older DBs—guard below
 };
+
+const CATEGORIES = ["healing", "escape", "support", "recovery", "awareness"] as const;
+
+function getCategoryFromTags(tags: string[] | null | undefined): Story["category"] {
+  if (!tags?.length) return "general";
+  const found = tags.find((t) => /^cat:/.test(t))?.split(":")[1];
+  return (CATEGORIES as readonly string[]).includes(found as string) ? (found as Story["category"]) : "general";
+}
 
 function mapRowToStory(row: StoryRow): Story {
   return {
@@ -37,13 +47,14 @@ function mapRowToStory(row: StoryRow): Story {
       verified: false,
     },
     created_at: row.created_at ?? new Date().toISOString(),
-    category: "general",
+    category: getCategoryFromTags(row.tags),
     likes: 0,
     comments_count: 0,
     views: 0,
     tags: Array.isArray(row.tags) ? row.tags : [],
     featured: false,
-  } as Story;
+    is_liked: false,
+  };
 }
 
 export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
@@ -51,44 +62,52 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
   const [loading, setLoading] = useState(!propStory && !!storyId);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch story by id (explicit columns to match DB)
   useEffect(() => {
     if (propStory || !storyId) return;
 
     const fetchStory = async () => {
       try {
         setLoading(true);
-        const { data, error: dbError } = await supabase
-          .from("stories")
-          .select("*")
-          .eq("id", storyId)
-          .maybeSingle();
 
-        if (dbError) throw dbError;
-        if (!data) throw new Error("Story not found.");
-        // comments count
+        // Prefer selecting explicit columns present in your schema
+        let { data: row, error: selErr } = await supabase
+          .from("stories")
+          .select("id,title,content,author_id,created_at,tags,status")
+          .eq("id", storyId)
+          .maybeSingle<StoryRow>();
+
+        // Fallback for schemas without `status`
+        if (selErr?.code === "42703") {
+          const r2 = await supabase
+            .from("stories")
+            .select("id,title,content,author_id,created_at,tags")
+            .eq("id", storyId)
+            .maybeSingle<StoryRow>();
+          row = r2.data ?? null;
+          selErr = r2.error as typeof selErr;
+        }
+
+        if (selErr) throw selErr;
+        if (!row) throw new Error("Story not found.");
+
+        // Aggregate counts (RLS: both are public SELECT per your policies)
+        const [{ data: likeRow }, { data: viewRow }] = await Promise.all([
+          supabase.from("story_like_counts").select("likes").eq("story_id", row.id).maybeSingle<{ likes: number }>(),
+          supabase.from("story_view_counts").select("views").eq("story_id", row.id).maybeSingle<{ views: number }>(),
+        ]);
+
+        // Comments count (public SELECT on comments)
         const { count: commentsCount } = await supabase
           .from("comments")
           .select("id", { count: "exact", head: true })
-          .eq("story_id", storyId);
+          .eq("story_id", row.id);
 
-        // likes + views counts via aggregates (prefer), default to 0 if not accessible
-        const [{ data: likeRow }, { data: viewRow }] = await Promise.all([
-          supabase
-            .from("story_like_counts")
-            .select("likes")
-            .eq("story_id", storyId)
-            .maybeSingle<{ likes: number }>(),
-          supabase
-            .from("story_view_counts")
-            .select("views")
-            .eq("story_id", storyId)
-            .maybeSingle<{ views: number }>(),
-        ]);
-
-        const mapped = mapRowToStory(data);
-        mapped.comments_count = commentsCount ?? 0;
+        const mapped = mapRowToStory(row);
         mapped.likes = likeRow?.likes ?? 0;
         mapped.views = viewRow?.views ?? 0;
+        mapped.comments_count = commentsCount ?? 0;
+
         setStory(mapped);
       } catch (err) {
         console.error("Error fetching story:", err);
@@ -102,12 +121,14 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
     fetchStory();
   }, [propStory, storyId]);
 
-  // Ensure author profile (name + avatar) even when provided via prop
+  // Enrich author profile (name/avatar/verified) from community_members
+  // NOTE: RLS allows SELECT only for authenticated; we gracefully ignore errors for anon users.
   useEffect(() => {
     const enrichAuthor = async () => {
       if (!story?.author?.id) return;
-      // Skip if already has avatar or a non-generic name
-      const hasCustomName = story.author.name && story.author.name !== "User" && story.author.name !== "Anonymous";
+
+      const hasCustomName =
+        story.author.name && story.author.name !== "User" && story.author.name !== "Anonymous";
       if (story.author.avatar && hasCustomName) return;
 
       const { data, error: pErr } = await supabase
@@ -115,56 +136,56 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         .select("name, avatar_url, verified")
         .eq("user_id", story.author.id)
         .maybeSingle<{ name: string | null; avatar_url: string | null; verified: boolean | null }>();
-      if (pErr) return;
+
+      if (pErr) {
+        // Likely blocked by RLS when anon; just keep existing anonymous display
+        return;
+      }
       if (data) {
-        setStory((s) => s ? {
-          ...s,
-          author: {
-            ...s.author,
-            name: data.name || s.author.name,
-            avatar: data.avatar_url ?? s.author.avatar,
-            verified: !!data.verified,
-          }
-        } : s);
+        setStory((s) =>
+          s
+            ? {
+                ...s,
+                author: {
+                  ...s.author,
+                  name: data.name || s.author.name,
+                  avatar: data.avatar_url ?? s.author.avatar,
+                  verified: !!data.verified,
+                },
+              }
+            : s
+        );
       }
     };
     enrichAuthor();
   }, [story?.author?.id, story?.author?.avatar, story?.author?.name]);
 
-  // Enrich metrics for provided stories as well
+  // Refresh metrics for prop-provided stories as well
   useEffect(() => {
     const enrichMetrics = async () => {
-      if (!propStory && !storyId) return; // handled by fetchStory above
       if (!story?.id) return;
       try {
         const [{ data: likeRow }, { data: viewRow }, { count: commentsCount }] = await Promise.all([
-          supabase
-            .from("story_like_counts")
-            .select("likes")
-            .eq("story_id", story.id)
-            .maybeSingle<{ likes: number }>(),
-          supabase
-            .from("story_view_counts")
-            .select("views")
-            .eq("story_id", story.id)
-            .maybeSingle<{ views: number }>(),
-          supabase
-            .from("comments")
-            .select("id", { count: "exact", head: true })
-            .eq("story_id", story.id),
+          supabase.from("story_like_counts").select("likes").eq("story_id", story.id).maybeSingle<{ likes: number }>(),
+          supabase.from("story_view_counts").select("views").eq("story_id", story.id).maybeSingle<{ views: number }>(),
+          supabase.from("comments").select("id", { count: "exact", head: true }).eq("story_id", story.id),
         ]);
-        setStory((s) => s ? {
-          ...s,
-          likes: likeRow?.likes ?? s.likes,
-          views: viewRow?.views ?? s.views,
-          comments_count: commentsCount ?? s.comments_count,
-        } : s);
+
+        setStory((s) =>
+          s
+            ? {
+                ...s,
+                likes: likeRow?.likes ?? s.likes,
+                views: viewRow?.views ?? s.views,
+                comments_count: typeof commentsCount === "number" ? commentsCount : s.comments_count,
+              }
+            : s
+        );
       } catch {
-        // ignore metrics errors silently
+        // ignore metric errors
       }
     };
     enrichMetrics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [story?.id]);
 
   if (loading) {
@@ -195,11 +216,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
 
   return (
     <div className="group overflow-hidden rounded-lg border transition-all hover:shadow-md">
-      <Link
-        to={`/stories/${story.id}`}
-        className="block"
-        aria-label={`View story: ${story.title}`}
-      >
+      <Link to={`/stories/${story.id}`} className="block" aria-label={`View story: ${story.title}`}>
         <div className="relative w-full overflow-hidden">
           {story.featured && (
             <div className="absolute top-2 right-2">
@@ -209,7 +226,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
         </div>
         <div className="p-4">
           <h3 className="mb-1 line-clamp-2 text-lg font-semibold transition-colors group-hover:text-primary">
-            {story.title}
+            {story.title?.trim() || (story.content ? String(story.content).slice(0, 60) + "..." : "Untitled")}
           </h3>
         </div>
       </Link>
@@ -228,16 +245,12 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
               {story.author.anonymous ? (
                 <Shield className="h-4 w-4" />
               ) : (
-                <span className="text-[11px] font-semibold">
-                  {(story.author.name || "A").slice(0, 1)}
-                </span>
+                <span className="text-[11px] font-semibold">{(story.author.name || "A").slice(0, 1)}</span>
               )}
             </div>
           )}
 
-          <span className="flex-1 truncate font-medium text-foreground">
-            {story.author.name}
-          </span>
+          <span className="flex-1 truncate font-medium text-foreground">{story.author.name}</span>
           <span className="shrink-0">•</span>
           <span className="inline-flex items-center gap-1 shrink-0">
             <Clock className="h-4 w-4" />
@@ -250,20 +263,21 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
           </span>
         </div>
 
-        <p className="mb-3 line-clamp-3 text-sm text-muted-foreground">
-          {story.content}
-        </p>
+        <p className="mb-3 line-clamp-3 text-sm text-muted-foreground">{story.content}</p>
 
         {Array.isArray(story.tags) && story.tags.length > 0 ? (
           <div className="mb-3 flex flex-wrap gap-1">
-            {story.tags.slice(0, 4).map((tag) => (
-              <Badge key={tag} variant="secondary" className="text-xs">
-                #{String(tag).replace("-", "")}
-              </Badge>
-            ))}
-            {story.tags.length > 4 && (
+            {story.tags
+              .filter((t) => !/^cat:/.test(String(t)))
+              .slice(0, 4)
+              .map((tag) => (
+                <Badge key={`${story.id}-${tag}`} variant="secondary" className="text-xs">
+                  #{String(tag).replace(/-/g, "")}
+                </Badge>
+              ))}
+            {story.tags.filter((t) => !/^cat:/.test(String(t))).length > 4 && (
               <Badge variant="secondary" className="text-xs">
-                +{story.tags.length - 4} more
+                +{story.tags.filter((t) => !/^cat:/.test(String(t))).length - 4} more
               </Badge>
             )}
           </div>
@@ -286,10 +300,7 @@ export function StoryCard({ story: propStory, storyId }: StoryCardProps) {
               {story.views}
             </span>
           </div>
-          <Link
-            to={`/stories/${story.id}`}
-            className="text-primary underline-offset-2 hover:underline"
-          >
+          <Link to={`/stories/${story.id}`} className="text-primary underline-offset-2 hover:underline">
             Read more
           </Link>
         </div>

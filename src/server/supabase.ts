@@ -1,20 +1,25 @@
+// src/server/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const url = import.meta.env.VITE_SUPABASE_URL as string;
+const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
+if (!url || !anon) {
+  throw new Error("VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing");
+}
+
+const supabase = createClient(url, anon, {
+  // You are not using auth.user
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
     flowType: "pkce",
-    storage: localStorage,
-    storageKey: "ss.supabase.auth", // unique key to avoid conflicts
+    storageKey: "sb-community-auth",
+    storage: undefined,
   },
-   global: {
-      headers: { "x-client-info": "safe-space-web" },
-    },
+  // Avoid auto WebSocket connect
+  global: { headers: { "x-client-info": "safe-space-web" } },
 });
 
 export default supabase;

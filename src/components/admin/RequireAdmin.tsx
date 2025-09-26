@@ -1,17 +1,24 @@
+// src/components/admin/RequireAdmin.tsx
 import React from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import Loading from "@/components/utils/Loading";
 
+const ALLOWED = ["super_admin", "admin", "moderator"] as const;
+
+type AdminRole = typeof ALLOWED[number];
+
+function isAllowedRole(value: unknown): value is AdminRole {
+  return typeof value === "string" && (ALLOWED as readonly string[]).includes(value);
+}
+
 export default function RequireAdmin({ children }: { children: React.ReactNode }) {
-  const { loading, role } = useAdminSession();
+  const { loading, isSignedIn, role } = useAdminSession();
   const location = useLocation();
 
-  const allowed = ["super_admin", "admin", "moderator"] as const;
-  const isAllowed = role && (allowed as readonly string[]).includes(String(role));
+  const liveAllowed = isSignedIn && isAllowedRole(role);
 
-  // If a cached/admin role is present, allow rendering even while loading
-  if (!isAllowed && loading) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <Loading />
@@ -19,9 +26,9 @@ export default function RequireAdmin({ children }: { children: React.ReactNode }
     );
   }
 
-  if (!isAllowed) {
+  if (!liveAllowed) {
     return <Navigate to="/unauthorized" state={{ from: location.pathname }} replace />;
   }
 
-  return <>{children}</>;
+  return children;
 }

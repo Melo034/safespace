@@ -101,7 +101,9 @@ const Login = () => {
           await supabase.auth.signOut();
           localStorage.removeItem(AUTH_KEY);
           localStorage.removeItem(MEMBER_LATEST_KEY);
-        } catch {}
+        } catch {
+          // intentionally left blank: ignore localStorage errors
+        }
         toast.info("This is an admin account. Please use the admin login.");
         navigate("/admin/login");
         return;

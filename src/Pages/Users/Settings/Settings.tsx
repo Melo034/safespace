@@ -28,7 +28,9 @@ export default function Settings() {
     try {
       const fromLS = localStorage.getItem("ss.sos.email");
       if (fromLS) setSosEmail(fromLS);
-    } catch {}
+    } catch {
+      // Ignore localStorage errors
+    }
 
     (async () => {
       try {
@@ -43,7 +45,9 @@ export default function Settings() {
         if (data?.sos_contact_phone) setSosPhone(data.sos_contact_phone);
         if (data?.sos_contact_email) setSosEmail(data.sos_contact_email);
         if (typeof data?.sos_one_tap === "boolean") setOneTap(Boolean(data.sos_one_tap));
-      } catch {}
+      } catch {
+        // Ignore errors from supabase or fetching user data
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -200,7 +204,7 @@ export default function Settings() {
                     <Label>Frequency</Label>
                     <p className="text-xs text-muted-foreground">How often to receive digests</p>
                   </div>
-                  <Select value={prefs.notifications.frequency} onValueChange={(v) => setNotifications({ frequency: v as any })}>
+                  <Select value={prefs.notifications.frequency} onValueChange={(v) => setNotifications({ frequency: v as "realtime" | "daily" | "weekly" | "off" })}>
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>

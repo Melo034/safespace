@@ -104,15 +104,23 @@ const SignUp = () => {
     }
 
     try {
-      const display_name = `${sanitized.firstName} ${sanitized.lastName}`.replace(/\s+/g, " ").trim();
+      const rawUsername = sanitized.email.split("@")[0];
+      const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "").slice(1, 30);
+
       const { data, error } = await supabase.auth.signUp({
         email: sanitized.email,
         password: sanitized.password,
         options: {
-          data: { display_name },
+          data: {
+            full_name: `${sanitized.firstName} ${sanitized.lastName}`.replace(/\s+/g, " ").trim(),
+            first_name: sanitized.firstName.trim(),
+            last_name: sanitized.lastName.trim(),
+            username, // important
+          },
           emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       });
+
       if (error) throw error;
 
       const session = data.session; // null when email confirmation is on

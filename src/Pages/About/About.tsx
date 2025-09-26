@@ -5,7 +5,6 @@ import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   HeartHandshake,
   ShieldCheck,
@@ -16,8 +15,6 @@ import {
 } from "lucide-react";
 import LiveChat from "@/components/Home/LiveChat";
 import MissionImpact from "@/components/About/MissionImpact";
-import TeamAdvisors from "@/components/About/TeamAdvisors";
-import PartnersSection from "@/components/About/Partners";
 import SafetyPrivacy from "@/components/About/SafetyPrivacy";
 import MediaContact from "@/components/About/MediaContact";
 import SOSButton from "@/components/utils/SOSButton";
@@ -113,7 +110,7 @@ export default function About() {
             violence report incidents, access trusted resources, and connect with a caring community.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-            <Button asChild className="w-full sm:w-auto bg-gradient-to-r from-primary to-rose-500 text-white hover:from-primary/90 hover:to-rose-500/90">
+            <Button asChild>
               <Link to="/report">Report an Incident</Link>
             </Button>
             <Button asChild variant="outline" className="w-full sm:w-auto">
@@ -201,42 +198,8 @@ export default function About() {
           </div>
         </section>
 
-        {/* Team (placeholder) */}
-        <section className="mb-16">
-          <h2 className="text-xl sm:text-2xl font-semibold mb-4">Who’s Behind This</h2>
-          <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3].map((n) => (
-              <Card key={n} className="hover:-translate-y-0.5 hover:shadow-md transition">
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <Avatar className="h-10 w-10">
-                      <AvatarImage src="/Images/placeholder.jpg" />
-                      <AvatarFallback>SS</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <CardTitle className="text-base">Team Member</CardTitle>
-                      <p className="text-xs text-muted-foreground">Role</p>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    We’re a small team of designers, engineers, advocates, and volunteers.
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </section>
-
         {/* Mission & Impact */}
         <MissionImpact />
-
-        {/* Team & Advisors */}
-        <TeamAdvisors />
-
-        {/* Partners */}
-        <PartnersSection />
 
         {/* Safety & Privacy */}
         <SafetyPrivacy />
@@ -252,7 +215,7 @@ export default function About() {
                 </p>
               </div>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                <Button asChild className="w-full sm:w-auto bg-gradient-to-r from-primary to-rose-500 text-white hover:from-primary/90 hover:to-rose-500/90">
+                <Button asChild>
                   <Link to="/report">Report Now</Link>
                 </Button>
                 <Button asChild variant="outline" className="w-full sm:w-auto">

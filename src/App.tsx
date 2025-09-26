@@ -1,10 +1,10 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import AuthInit from "@/lib/AuthInit";
 import { Suspense, lazy } from "react";
 import { Toaster } from "sonner";
 import Loading from "./components/utils/Loading";
 import RequireAdmin from "@/components/admin/RequireAdmin";
 import SOSButton from "@/components/utils/SOSButton";
-import QuickExit from "@/components/utils/QuickExit";
 
 // Route-based code splitting (lazy loading)
 const Home = lazy(() => import("./Pages/Home/Home"));
@@ -48,6 +48,7 @@ function App() {
       <Toaster richColors position="top-center" closeButton={true} />
       {/* Let routed pages control their own layout; avoid centering the entire app */}
       <div className="min-h-screen">
+        <AuthInit />
         <Suspense
           fallback={
             <div className="flex w-full min-h-screen items-center justify-center p-6">
@@ -108,7 +109,6 @@ function App() {
       </Routes>
         </Suspense >
     {!hideSos && <SOSButton />}
-    <QuickExit />
     </div>
     </>
   );
