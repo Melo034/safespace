@@ -123,6 +123,14 @@ const SupportServiceApplication = () => {
       const { data: sessionData } = await supabase.auth.getSession();
       if (!sessionData.session) { toast.error("Please sign in to submit."); navigate("/auth/login"); return; }
 
+      const sessionUser = sessionData.session.user;
+      if (!sessionUser?.id) {
+        toast.error("Unable to verify your session. Please sign in again.");
+        await supabase.auth.signOut();
+        navigate("/auth/login");
+        return;
+      }
+
       // Build payload aligned to DB columns (let DB defaults fill created_at/updated_at/verified/reviews)
       const payload = {
         name: formData.name.trim(),
@@ -141,20 +149,17 @@ const SupportServiceApplication = () => {
         credentials: formData.credentials.trim(),
         tags: toCSVArray(formData.tags), // text[]
         status: "pending" as const, // enum support_status; default is 'pending'
+        created_by: sessionUser.id,
         // Do NOT send rating/reviews/verified/avatar unless necessary; DB defaults handle them.
       };
 
-      const { data: inserted, error } = await supabase
-        .from("support_services")
-        .insert(payload)
-        .select("id,name,status")
-        .single();
+      const { error } = await supabase.from("support_services").insert(payload);
       if (error) throw error;
 
       await logRecentActivity({
-        message: `Support service application submitted: ${inserted?.name ?? payload.name}`,
+        message: `Support service application submitted: ${payload.name}`,
         type: "support",
-        status: inserted?.status ?? payload.status,
+        status: payload.status,
       });
 
       toast.success("Application submitted successfully! You'll be notified once reviewed.");

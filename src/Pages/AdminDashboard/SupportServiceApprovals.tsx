@@ -8,13 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { logRecentActivity } from "@/lib/recentActivity";
 import {
   Search,
-  Edit,
   Trash2,
   Eye,
   CheckCircle,
@@ -122,7 +120,8 @@ const SupportServiceApprovals = () => {
   const [statusFilter, setStatusFilter] = useState<"all" | ApprovalStatus>("all");
   const [selectedSupport, setSelectedSupport] = useState<UiSupport | null>(null);
   const [showViewDialog, setShowViewDialog] = useState(false);
-  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UiSupport | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   /* load + realtime */
@@ -206,32 +205,35 @@ const SupportServiceApprovals = () => {
     setSelectedSupport(item);
     setShowViewDialog(true);
   };
-
-  const handleEdit = (item: UiSupport) => {
-    setSelectedSupport(item);
-    setShowEditDialog(true);
+  const openDeleteDialog = (item: UiSupport) => {
+    setDeleteTarget(item);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this support service?")) return;
+  const closeDeleteDialog = () => {
+    if (!deleteLoading) {
+      setDeleteTarget(null);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      setLoading(true);
-      const target = support.find((svc) => svc.id === id);
-      const { error } = await supabase.from("support_services").delete().eq("id", id);
+      setDeleteLoading(true);
+      const { error } = await supabase.from("support_services").delete().eq("id", deleteTarget.id);
       if (error) throw error;
+      setSupport((prev) => prev.filter((svc) => svc.id !== deleteTarget.id));
       toast.success("Support service deleted.");
-      if (target) {
-        await logRecentActivity({
-          message: `Support service deleted: ${target.name}`,
-          type: "support",
-          status: "deleted",
-        });
-      }
+      await logRecentActivity({
+        message: `Support service deleted: ${deleteTarget.name}`,
+        type: "support",
+        status: "deleted",
+      });
+      setDeleteTarget(null);
     } catch (err: unknown) {
       console.error(err);
       toast.error("Failed to delete support service.");
     } finally {
-      setLoading(false);
+      setDeleteLoading(false);
     }
   };
 
@@ -289,51 +291,6 @@ const SupportServiceApprovals = () => {
     } catch (err) {
       console.error(err);
       toast.error("Failed to reject support service.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUpdateSupport = async () => {
-    if (!selectedSupport) return;
-    if (!VALID_TYPES.includes(selectedSupport.type)) {
-      toast.error("Invalid service type.");
-      return;
-    }
-    try {
-      setLoading(true);
-      const payload: Omit<DbSupportRow, "id"> = {
-        name: selectedSupport.name,
-        type: selectedSupport.type,
-        title: selectedSupport.title,
-        specialization: selectedSupport.specialization,
-        description: selectedSupport.description,
-        contact_info: selectedSupport.contact_info,
-        website: selectedSupport.website,
-        avatar: selectedSupport.avatar,
-        rating: selectedSupport.rating,
-        reviews: selectedSupport.reviews,
-        verified: selectedSupport.verified,
-        availability: selectedSupport.availability,
-        status: selectedSupport.status,
-        credentials: selectedSupport.credentials,
-        languages: selectedSupport.languages,
-        tags: selectedSupport.tags,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase.from("support_services").update(payload).eq("id", selectedSupport.id);
-      if (error) throw error;
-      setShowEditDialog(false);
-      toast.success("Support service updated.");
-      await logRecentActivity({
-        message: `Support service updated: ${selectedSupport.name}`,
-        type: "support",
-        status: selectedSupport.status,
-      });
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to update support service.");
     } finally {
       setLoading(false);
     }
@@ -586,19 +543,9 @@ const SupportServiceApprovals = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="rounded-full"
-                            onClick={() => handleEdit(item)}
-                            disabled={loading}
-                            aria-label={`Edit ${item.name}`}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
                             className="rounded-full text-destructive hover:bg-destructive/10"
-                            onClick={() => handleDelete(item.id)}
-                            disabled={loading}
+                            onClick={() => openDeleteDialog(item)}
+                            disabled={loading || deleteLoading}
                             aria-label={`Delete ${item.name}`}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -697,229 +644,27 @@ const SupportServiceApprovals = () => {
             </DialogContent>
           </Dialog>
 
-          {/* Edit dialog */}
-          <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-            <DialogContent className="max-w-2xl rounded-xl">
+          <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) closeDeleteDialog(); }}>
+            <DialogContent className="max-w-md rounded-xl">
               <DialogHeader>
-                <DialogTitle>Edit Support Service</DialogTitle>
+                <DialogTitle>Delete Support Service</DialogTitle>
+                <DialogDescription>
+                  {deleteTarget ? (
+                    <span>
+                      This will permanently remove <strong>{deleteTarget.name}</strong> from the directory.
+                      This action cannot be undone.
+                    </span>
+                  ) : null}
+                </DialogDescription>
               </DialogHeader>
-              {selectedSupport && (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleUpdateSupport();
-                  }}
-                  className="space-y-4"
-                >
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-sm font-medium">Name</Label>
-                      <Input
-                        value={selectedSupport.name}
-                        onChange={(e) => setSelectedSupport({ ...selectedSupport, name: e.target.value })}
-                        disabled={loading}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Type</Label>
-                      <Select
-                        value={selectedSupport.type}
-                        onValueChange={(v) => setSelectedSupport({ ...selectedSupport, type: v as ServiceType })}
-                        disabled={loading}
-                        required
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {VALID_TYPES.map((t) => (
-                            <SelectItem key={t} value={t}>
-                              {t.replace("-", " ")}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Title</Label>
-                    <Input
-                      value={selectedSupport.title}
-                      onChange={(e) => setSelectedSupport({ ...selectedSupport, title: e.target.value })}
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Specialization</Label>
-                    <Input
-                      value={selectedSupport.specialization}
-                      onChange={(e) => setSelectedSupport({ ...selectedSupport, specialization: e.target.value })}
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Description</Label>
-                    <Textarea
-                      value={selectedSupport.description}
-                      onChange={(e) => setSelectedSupport({ ...selectedSupport, description: e.target.value })}
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-sm font-medium">Address</Label>
-                      <Input
-                        value={selectedSupport.contact_info.address}
-                        onChange={(e) =>
-                          setSelectedSupport({
-                            ...selectedSupport,
-                            contact_info: { ...selectedSupport.contact_info, address: e.target.value },
-                          })
-                        }
-                        disabled={loading}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Phone</Label>
-                      <Input
-                        value={selectedSupport.contact_info.phone}
-                        onChange={(e) =>
-                          setSelectedSupport({
-                            ...selectedSupport,
-                            contact_info: { ...selectedSupport.contact_info, phone: e.target.value },
-                          })
-                        }
-                        disabled={loading}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-sm font-medium">Email</Label>
-                      <Input
-                        value={selectedSupport.contact_info.email}
-                        onChange={(e) =>
-                          setSelectedSupport({
-                            ...selectedSupport,
-                            contact_info: { ...selectedSupport.contact_info, email: e.target.value },
-                          })
-                        }
-                        disabled={loading}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Website</Label>
-                      <Input
-                        value={selectedSupport.website}
-                        onChange={(e) => setSelectedSupport({ ...selectedSupport, website: e.target.value })}
-                        disabled={loading}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Credentials</Label>
-                    <Input
-                      value={selectedSupport.credentials}
-                      onChange={(e) => setSelectedSupport({ ...selectedSupport, credentials: e.target.value })}
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Languages (comma-separated)</Label>
-                    <Input
-                      value={selectedSupport.languages.join(", ")}
-                      onChange={(e) =>
-                        setSelectedSupport({
-                          ...selectedSupport,
-                          languages: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
-                        })
-                      }
-                      disabled={loading}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Tags (comma-separated)</Label>
-                    <Input
-                      value={selectedSupport.tags.join(", ")}
-                      onChange={(e) =>
-                        setSelectedSupport({
-                          ...selectedSupport,
-                          tags: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
-                        })
-                      }
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Availability</Label>
-                    <Select
-                      value={selectedSupport.availability}
-                      onValueChange={(v) =>
-                        setSelectedSupport({ ...selectedSupport, availability: v as Availability })
-                      }
-                      disabled={loading}
-                      required
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="available">Available</SelectItem>
-                        <SelectItem value="limited">Limited</SelectItem>
-                        <SelectItem value="unavailable">Unavailable</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium">Status</Label>
-                    <Select
-                      value={selectedSupport.status}
-                      onValueChange={(v) =>
-                        setSelectedSupport({ ...selectedSupport, status: v as ApprovalStatus })
-                      }
-                      disabled={loading}
-                      required
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="approved">Approved</SelectItem>
-                        <SelectItem value="rejected">Rejected</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex justify-end gap-2">
-                    <Button type="button" variant="outline" onClick={() => setShowEditDialog(false)} disabled={loading}>
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={loading}>
-                      Update Support Service
-                    </Button>
-                  </div>
-                </form>
-              )}
+              <DialogFooter className="flex justify-end gap-2">
+                <Button variant="outline" onClick={closeDeleteDialog} disabled={deleteLoading}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={confirmDelete} disabled={deleteLoading}>
+                  {deleteLoading ? "Deleting..." : "Delete"}
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
@@ -929,3 +674,5 @@ const SupportServiceApprovals = () => {
 };
 
 export default SupportServiceApprovals;
+
+

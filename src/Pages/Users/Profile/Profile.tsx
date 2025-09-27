@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import Sidebar from "../Components/Sidebar";
@@ -236,6 +236,8 @@ const Profile = () => {
   const [selectedService, setSelectedService] = useState<SupportService | null>(null);
   const [serviceForm, setServiceForm] = useState<SupportServiceFormState | null>(null);
   const [supportDialogOpen, setSupportDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<SupportService | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [serviceSaving, setServiceSaving] = useState(false);
   const [supportError, setSupportError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -372,6 +374,39 @@ const Profile = () => {
     setServiceForm(null);
     setSupportError(null);
     setSelectedService(null);
+  };
+
+  const openDeleteDialog = (service: SupportService) => {
+    setDeleteTarget(service);
+  };
+
+  const closeDeleteDialog = () => {
+    if (!deleteLoading) {
+      setDeleteTarget(null);
+    }
+  };
+
+  const handleDeleteSupport = async () => {
+    if (!deleteTarget) return;
+    try {
+      setDeleteLoading(true);
+      const { error } = await supabase.from("support_services").delete().eq("id", deleteTarget.id);
+      if (error) throw error;
+
+      setSupportServices((prev) => prev.filter((svc) => svc.id !== deleteTarget.id));
+
+      if (selectedService && selectedService.id === deleteTarget.id) {
+        closeSupportDialog();
+      }
+
+      toast.success("Support service deleted.");
+    } catch (err) {
+      console.error("Error deleting support service:", err);
+      toast.error("Failed to delete support service.");
+    } finally {
+      setDeleteLoading(false);
+      setDeleteTarget(null);
+    }
   };
 
   const handleServiceFormChange = <K extends keyof SupportServiceFormState>(field: K, value: SupportServiceFormState[K]) => {
@@ -740,13 +775,18 @@ const Profile = () => {
                             Last updated {new Date(service.updated_at).toLocaleString()}
                           </div>
 
-                          <div className="mt-4 flex items-center justify-between">
+                          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="text-xs text-muted-foreground">
-                              Contact: {service.contact.email || "—"} | {service.contact.phone || "—"}
+                              Contact: {service.contact.email || "-"} | {service.contact.phone || "-"}
                             </div>
-                            <Button size="sm" variant="outline" onClick={() => openSupportDialog(service)}>
-                              Manage listing
-                            </Button>
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="outline" onClick={() => openSupportDialog(service)} disabled={serviceSaving || deleteLoading}>
+                                Manage listing
+                              </Button>
+                              <Button size="sm" variant="destructive" onClick={() => openDeleteDialog(service)} disabled={deleteLoading}>
+                                Delete
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -969,6 +1009,28 @@ const Profile = () => {
               <Loading />
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) closeDeleteDialog(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Support Service</DialogTitle>
+            <DialogDescription>
+              {deleteTarget ? (
+                <span>
+                  This will permanently remove <strong>{deleteTarget.name}</strong> from the directory. This action cannot be undone.
+                </span>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex justify-end gap-2">
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={deleteLoading}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteSupport} disabled={deleteLoading}>
+              {deleteLoading ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Footer />
