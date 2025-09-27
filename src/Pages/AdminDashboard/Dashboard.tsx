@@ -41,6 +41,49 @@ import { IncidentType } from "@/lib/types";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import AdminHeader from "@/components/admin/AdminHeader";
 
+const ACTIVITY_TYPES: DashActivity["type"][] = ["report", "story", "comment", "support", "system", "resource"];
+
+function normalizeActivityType(value: unknown): DashActivity["type"] {
+  const lower = String(value ?? "").toLowerCase() as DashActivity["type"];
+  return ACTIVITY_TYPES.includes(lower) ? lower : "system";
+}
+
+function normalizeActivityStatus(value: unknown): string {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return raw || "info";
+}
+
+function formatStatusLabel(status: string): string {
+  if (!status) return "Info";
+  return status
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function getActivityBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  switch (status) {
+    case "approved":
+    case "resolved":
+    case "published":
+    case "verified":
+    case "created":
+    case "success":
+      return "default";
+    case "pending":
+    case "in progress":
+    case "info":
+    case "posted":
+      return "outline";
+    case "rejected":
+    case "deleted":
+    case "error":
+    case "failed":
+      return "destructive";
+    default:
+      return "secondary";
+  }
+}
+
 /** DB-aligned unions */
 type ReportPriority = "Low" | "Medium" | "High" | "Critical";
 type ReportStatus = "Open" | "In Progress" | "Resolved";
@@ -226,8 +269,8 @@ export default function Dashboard() {
         (activityData ?? []).map((a) => ({
           id: a.id,
           message: a.message ?? "",
-          type: a.type ?? "report",
-          status: a.status ?? "unknown",
+          type: normalizeActivityType(a.type),
+          status: normalizeActivityStatus(a.status),
           time: a.created_at ?? new Date().toISOString(),
         }))
       );
@@ -280,7 +323,7 @@ export default function Dashboard() {
               id: newAlert.id,
               message: `New ${newAlert.type} report: ${newAlert.title}`,
               type: "report",
-              status: newAlert.status,
+              status: normalizeActivityStatus(newAlert.status),
               time: newAlert.timestamp,
             },
             ...prev.slice(0, 4),
@@ -324,7 +367,7 @@ export default function Dashboard() {
             id: data.id,
             message: `New story: ${data.title ?? "Untitled"}`,
             type: "story",
-            status: "published",
+            status: normalizeActivityStatus("published"),
             time: data.created_at || new Date().toISOString(),
           },
           ...prev.slice(0, 4),
@@ -342,7 +385,7 @@ export default function Dashboard() {
             id: d.id,
             message: "New comment on story",
             type: "comment",
-            status: "posted",
+            status: normalizeActivityStatus("posted"),
             time: d.created_at || new Date().toISOString(),
           },
           ...prev.slice(0, 4),
@@ -456,6 +499,12 @@ export default function Dashboard() {
         return BookOpen;
       case "comment":
         return MessageSquare;
+      case "support":
+        return Shield;
+      case "system":
+        return Bell;
+      case "resource":
+        return Users;
       default:
         return Clock;
     }
@@ -555,6 +604,7 @@ export default function Dashboard() {
               <div className="space-y-4">
                 {recentActivity.map((a) => {
                   const Icon = getActivityIcon(a.type);
+                  const statusLabel = formatStatusLabel(a.status);
                   return (
                     <div key={a.id} className="flex items-center space-x-4 p-3 rounded-lg bg-muted/30">
                       <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -564,7 +614,7 @@ export default function Dashboard() {
                         <p className="text-sm font-medium text-foreground">{a.message}</p>
                         <p className="text-xs text-muted-foreground">{formatDistanceToNow(parseISO(a.time), { addSuffix: true })}</p>
                       </div>
-                      <Badge variant="secondary" className="text-xs">{a.status}</Badge>
+                      <Badge variant={getActivityBadgeVariant(a.status)} className="text-xs">{statusLabel}</Badge>
                     </div>
                   );
                 })}

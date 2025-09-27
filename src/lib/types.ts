@@ -95,7 +95,7 @@ export interface DashAlert {
 export interface DashActivity {
   id: string;
   message: string;
-  type: "report" | "story" | "comment";
+  type: "report" | "story" | "comment" | "support" | "system" | "resource";
   status: string;
   time: string;
 }

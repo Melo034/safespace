@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { logRecentActivity } from "@/lib/recentActivity";
 import {
   Search,
   Edit,
@@ -215,9 +216,17 @@ const SupportServiceApprovals = () => {
     if (!window.confirm("Are you sure you want to delete this support service?")) return;
     try {
       setLoading(true);
+      const target = support.find((svc) => svc.id === id);
       const { error } = await supabase.from("support_services").delete().eq("id", id);
       if (error) throw error;
       toast.success("Support service deleted.");
+      if (target) {
+        await logRecentActivity({
+          message: `Support service deleted: ${target.name}`,
+          type: "support",
+          status: "deleted",
+        });
+      }
     } catch (err: unknown) {
       console.error(err);
       toast.error("Failed to delete support service.");
@@ -229,12 +238,25 @@ const SupportServiceApprovals = () => {
   const handleApprove = async (id: string) => {
     try {
       setLoading(true);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("support_services")
-        .update({ status: "approved", updated_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) throw error;
+        .update({
+          status: "approved",
+          verified: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select("id,status,verified,name")
+        .single();
+      if (error || !data) throw error || new Error("No row updated");
+      // optimistic UI
+      setSupport((prev) => prev.map(x => x.id === id ? { ...x, status: "approved", verified: true } : x));
       toast.success("Support service approved.");
+      await logRecentActivity({
+        message: `Support service approved: ${data.name ?? id}`,
+        type: "support",
+        status: "approved",
+      });
     } catch (err) {
       console.error(err);
       toast.error("Failed to approve support service.");
@@ -243,15 +265,27 @@ const SupportServiceApprovals = () => {
     }
   };
 
+
   const handleReject = async (id: string) => {
     try {
       setLoading(true);
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("support_services")
-        .update({ status: "rejected", updated_at: new Date().toISOString() })
-        .eq("id", id);
-      if (error) throw error;
+        .update({
+          status: "rejected",
+          verified: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select("id,status,verified,name")
+        .single();
+      if (error || !data) throw error || new Error("No row updated");
       toast.success("Support service rejected.");
+      await logRecentActivity({
+        message: `Support service rejected: ${data.name ?? id}`,
+        type: "support",
+        status: "rejected",
+      });
     } catch (err) {
       console.error(err);
       toast.error("Failed to reject support service.");
@@ -292,6 +326,11 @@ const SupportServiceApprovals = () => {
       if (error) throw error;
       setShowEditDialog(false);
       toast.success("Support service updated.");
+      await logRecentActivity({
+        message: `Support service updated: ${selectedSupport.name}`,
+        type: "support",
+        status: selectedSupport.status,
+      });
     } catch (err) {
       console.error(err);
       toast.error("Failed to update support service.");

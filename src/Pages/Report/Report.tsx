@@ -38,6 +38,35 @@ const Report = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        setHasSession(!!data.session?.user);
+        setCheckingSession(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setHasSession(false);
+        setCheckingSession(false);
+      });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setHasSession(!!session?.user);
+      setCheckingSession(false);
+    });
+
+    return () => {
+      active = false;
+      listener?.subscription.unsubscribe();
+    };
+  }, []);
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => {
@@ -51,6 +80,17 @@ const Report = () => {
 
   const removeFile = (key: string) => setFiles((prev) => prev.filter((f) => `${f.name}:${f.size}` !== key));
   const clearFiles = () => setFiles([]);
+
+  const uploadsDisabled = checkingSession || !hasSession;
+  const dropzoneMessage = checkingSession ? "Checking session..." : "Sign in to enable uploads";
+  const submitDisabled = isSubmitting || uploadsDisabled;
+  const submitLabel = uploadsDisabled
+    ? checkingSession
+      ? "Checking session..."
+      : "Sign in to submit"
+    : isSubmitting
+      ? "Submitting..."
+      : "Submit Report";
 
   /** ---- storage (public bucket 'reports') ---- */
   const uploadEvidence = async (evidenceFiles: File[]) => {
@@ -101,8 +141,17 @@ const Report = () => {
 
     setIsSubmitting(true);
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const reportedBy: string | null = isAnonymous ? null : auth.user?.id ?? null;
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+
+      const sessionUser = sessionData.session?.user ?? null;
+      if (!sessionUser) {
+        toast.error("Please sign in before submitting a report.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const reportedBy: string | null = isAnonymous ? null : sessionUser.id;
 
       let evidenceUrls: string[] = [];
       try {
@@ -363,6 +412,15 @@ return (
             {/* Draft controls removed */}
           </CardHeader>
           <CardContent>
+            {!checkingSession && !hasSession && (
+              <div className="mb-6 flex items-start gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+                <AlertTriangle className="mt-0.5 h-4 w-4" />
+                <div>
+                  <p className="font-medium">Sign in required</p>
+                  <p>Sign in to securely upload evidence and submit a report. You can still hide your identity by selecting the anonymous option.</p>
+                </div>
+              </div>
+            )}
             <form id="report-form" onSubmit={handleSubmit} className="space-y-8">
               <div className="space-y-3">
                 <Label htmlFor="anonymous" className="flex items-center gap-2 text-sm">
@@ -374,7 +432,7 @@ return (
                   Submit Anonymously
                   <Lock className="h-4 w-4 text-muted-foreground" />
                 </Label>
-                <p className="text-xs text-muted-foreground">We won’t collect your identity if you choose to remain anonymous.</p>
+                <p className="text-xs text-muted-foreground">Signing in lets us protect the upload process, but we still won't attach your identity if you choose to remain anonymous.</p>
               </div>
 
               {!isAnonymous && (
@@ -544,7 +602,14 @@ return (
 
               <div className="space-y-3">
                 <Label>Evidence Upload</Label>
-                <Dropzone files={files} onDrop={onDrop} onRemove={removeFile} onClear={clearFiles} />
+                <Dropzone
+                  files={files}
+                  onDrop={onDrop}
+                  onRemove={removeFile}
+                  onClear={clearFiles}
+                  disabled={uploadsDisabled}
+                  inactiveMessage={dropzoneMessage}
+                />
                 <p className="text-xs text-muted-foreground">Only upload files you’re comfortable sharing. You can blur/redact sensitive info.</p>
               </div>
 
@@ -570,8 +635,8 @@ return (
                 </div>
               </div>
 
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Submitting..." : "Submit Report"}
+              <Button type="submit" disabled={submitDisabled}>
+                {submitLabel}
               </Button>
             </form>
           </CardContent>
@@ -627,9 +692,11 @@ type DropzoneProps = {
   onDrop: (accepted: File[]) => void;
   onRemove: (key: string) => void;
   onClear: () => void;
+  disabled?: boolean;
+  inactiveMessage?: string;
 };
 
-const Dropzone = ({ files, onDrop, onRemove, onClear }: DropzoneProps) => {
+const Dropzone = ({ files, onDrop, onRemove, onClear, disabled = false, inactiveMessage }: DropzoneProps) => {
   const humanSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -644,24 +711,41 @@ const Dropzone = ({ files, onDrop, onRemove, onClear }: DropzoneProps) => {
       "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
       "application/pdf": [".pdf"],
     },
+    disabled,
   });
+
+  const dropzoneClasses = disabled
+    ? "cursor-not-allowed border-muted-foreground/20 bg-muted/30"
+    : isDragActive
+      ? "cursor-pointer border-primary bg-primary/5"
+      : "cursor-pointer border-muted-foreground/30 hover:bg-muted/40";
+
+  const helperText = disabled
+    ? inactiveMessage ?? "Uploads are temporarily disabled."
+    : "PNG, JPG, or PDF up to 10MB each";
 
   return (
     <div>
       <div
         {...getRootProps()}
-        className={`group relative rounded-lg border-2 border-dashed p-6 md:p-8 text-center cursor-pointer transition-colors ${isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/30 hover:bg-muted/40"
-          }`}
+        className={`group relative rounded-lg border-2 border-dashed p-6 md:p-8 text-center transition-colors ${dropzoneClasses}`}
+        aria-disabled={disabled}
       >
-        <input {...getInputProps()} aria-label="Upload evidence files" />
+        <input {...getInputProps()} aria-label="Upload evidence files" disabled={disabled} />
         <div className="flex flex-col items-center justify-center gap-2">
           <div className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
             <Upload className="h-5 w-5" />
           </div>
           <p className="text-sm">
-            <span className="font-medium text-primary">Click to upload</span> or drag and drop
+            {disabled ? (
+              <span className="font-medium text-muted-foreground">{inactiveMessage ?? "Uploads temporarily disabled"}</span>
+            ) : (
+              <>
+                <span className="font-medium text-primary">Click to upload</span> or drag and drop
+              </>
+            )}
           </p>
-          <p className="text-xs text-muted-foreground">PNG, JPG, or PDF up to 10MB each</p>
+          <p className="text-xs text-muted-foreground">{helperText}</p>
         </div>
       </div>
 

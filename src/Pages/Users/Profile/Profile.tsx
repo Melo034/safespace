@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import Sidebar from "../Components/Sidebar";
@@ -86,11 +89,155 @@ function mapRowToStory(row: StoryRow): Story {
   } as Story;
 }
 
+const SERVICE_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
+const SERVICE_AVAILABILITY = ["available", "limited", "unavailable"] as const;
+const SERVICE_STATUSES = ["pending", "approved", "rejected"] as const;
+
+type ServiceType = (typeof SERVICE_TYPES)[number];
+type AvailabilityType = (typeof SERVICE_AVAILABILITY)[number];
+type SupportStatus = (typeof SERVICE_STATUSES)[number];
+
+type ContactInfo = {
+  address: string;
+  phone: string;
+  email: string;
+};
+
+type SupportServiceRow = {
+  id: string;
+  name: string | null;
+  type: string | null;
+  title: string | null;
+  specialization: string | null;
+  description: string | null;
+  contact_info: Record<string, unknown> | null;
+  website: string | null;
+  availability: string | null;
+  status: string | null;
+  verified: boolean | null;
+  languages: string[] | null;
+  tags: string[] | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type SupportService = {
+  id: string;
+  name: string;
+  type: ServiceType;
+  title: string;
+  specialization: string;
+  description: string;
+  contact: ContactInfo;
+  website: string;
+  availability: AvailabilityType;
+  status: SupportStatus;
+  verified: boolean;
+  languages: string[];
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+type SupportServiceFormState = {
+  name: string;
+  title: string;
+  specialization: string;
+  description: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  availability: AvailabilityType;
+  type: ServiceType;
+  languages: string;
+  tags: string;
+};
+
+function toContactInfo(value: Record<string, unknown> | null): ContactInfo {
+  const source = (value ?? {}) as { address?: unknown; phone?: unknown; email?: unknown };
+  const address = typeof source.address === "string" ? source.address : "";
+  const phone = typeof source.phone === "string" ? source.phone : "";
+  const email = typeof source.email === "string" ? source.email : "";
+  return { address, phone, email };
+}
+
+function mapSupportRow(row: SupportServiceRow): SupportService {
+  const contact = toContactInfo(row.contact_info ?? null);
+  const availability = SERVICE_AVAILABILITY.includes(String(row.availability) as AvailabilityType)
+    ? (row.availability as AvailabilityType)
+    : "unavailable";
+  const status = SERVICE_STATUSES.includes(String(row.status) as SupportStatus)
+    ? (row.status as SupportStatus)
+    : "pending";
+  const type = SERVICE_TYPES.includes(String(row.type) as ServiceType)
+    ? (row.type as ServiceType)
+    : "support-group";
+
+  return {
+    id: row.id,
+    name: row.name ?? "Untitled Service",
+    type,
+    title: row.title ?? "",
+    specialization: row.specialization ?? "",
+    description: row.description ?? "",
+    contact,
+    website: row.website ?? "",
+    availability,
+    status,
+    verified: row.verified ?? false,
+    languages: Array.isArray(row.languages) ? row.languages : [],
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    created_at: row.created_at ?? new Date().toISOString(),
+    updated_at: row.updated_at ?? new Date().toISOString(),
+  };
+}
+
+function toCSVArray(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function fromArrayToCSV(arr: string[]): string {
+  return arr.join(", ");
+}
+
+function normalizeWebsite(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function humanizeType(value: string): string {
+  return value.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function statusVariant(status: SupportStatus): "secondary" | "outline" | "default" {
+  switch (status) {
+    case "approved":
+      return "default";
+    case "rejected":
+      return "secondary";
+    default:
+      return "outline";
+  }
+}
+
 const Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [member, setMember] = useState<CommunityMember | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
+  const [supportServices, setSupportServices] = useState<SupportService[]>([]);
+  const [supportLoading, setSupportLoading] = useState(true);
+  const [selectedService, setSelectedService] = useState<SupportService | null>(null);
+  const [serviceForm, setServiceForm] = useState<SupportServiceFormState | null>(null);
+  const [supportDialogOpen, setSupportDialogOpen] = useState(false);
+  const [serviceSaving, setServiceSaving] = useState(false);
+  const [supportError, setSupportError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -153,7 +300,21 @@ const Profile = () => {
         const userStories = (storiesRows ?? []).map((r) => mapRowToStory(r as StoryRow));
         setStories(userStories);
 
-        // 3) Update stories_count if changed (RLS: update_self_or_admin)
+        // 3) Fetch support services created by the user
+        const { data: supportRows, error: supportErr } = await supabase
+          .from("support_services")
+          .select(
+            "id,name,type,title,specialization,description,contact_info,website,availability,status,verified,languages,tags,created_at,updated_at"
+          )
+          .eq("created_by", user.id)
+          .order("created_at", { ascending: false });
+        if (supportErr) throw supportErr;
+
+        const services = (supportRows ?? []).map((row) => mapSupportRow(row as SupportServiceRow));
+        setSupportServices(services);
+        setSupportLoading(false);
+
+        // 4) Update stories_count if changed (RLS: update_self_or_admin)
         if ((currentMember.stories_count ?? 0) !== userStories.length) {
           await supabase
             .from("community_members")
@@ -165,8 +326,10 @@ const Profile = () => {
         console.error("Error loading profile:", err);
         setError("Failed to load profile. Please try again.");
         toast.error("Failed to load profile. Please try again.");
+        setSupportLoading(false);
       } finally {
         setLoading(false);
+        setSupportLoading(false);
       }
     };
 
@@ -180,6 +343,129 @@ const Profile = () => {
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) setAvatarFile(e.target.files[0]);
+  };
+
+  const buildFormStateFromService = (service: SupportService): SupportServiceFormState => ({
+    name: service.name,
+    title: service.title,
+    specialization: service.specialization,
+    description: service.description,
+    address: service.contact.address,
+    phone: service.contact.phone,
+    email: service.contact.email,
+    website: service.website,
+    availability: service.availability,
+    type: service.type,
+    languages: fromArrayToCSV(service.languages),
+    tags: fromArrayToCSV(service.tags),
+  });
+
+  const openSupportDialog = (service: SupportService) => {
+    setSelectedService(service);
+    setServiceForm(buildFormStateFromService(service));
+    setSupportError(null);
+    setSupportDialogOpen(true);
+  };
+
+  const closeSupportDialog = () => {
+    setSupportDialogOpen(false);
+    setServiceForm(null);
+    setSupportError(null);
+    setSelectedService(null);
+  };
+
+  const handleServiceFormChange = <K extends keyof SupportServiceFormState>(field: K, value: SupportServiceFormState[K]) => {
+    setServiceForm((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  const handleSupportSave = async () => {
+    if (!selectedService || !serviceForm) return;
+
+    setServiceSaving(true);
+    setSupportError(null);
+
+    try {
+      const name = serviceForm.name.trim();
+      const title = serviceForm.title.trim();
+      const specialization = serviceForm.specialization.trim();
+      const description = serviceForm.description.trim();
+      const address = serviceForm.address.trim();
+      const phone = serviceForm.phone.trim();
+      const email = serviceForm.email.trim();
+      const website = normalizeWebsite(serviceForm.website);
+
+      if (!name) {
+        setSupportError("Service name is required.");
+        return;
+      }
+      if (!title) {
+        setSupportError("Professional title is required.");
+        return;
+      }
+      if (!specialization) {
+        setSupportError("Specialization is required.");
+        return;
+      }
+      if (!description) {
+        setSupportError("Description is required.");
+        return;
+      }
+      if (!address) {
+        setSupportError("Address is required.");
+        return;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (email && !emailRegex.test(email)) {
+        setSupportError("Please provide a valid contact email.");
+        return;
+      }
+
+      const languages = toCSVArray(serviceForm.languages);
+      const tags = toCSVArray(serviceForm.tags);
+
+      const payload = {
+        name,
+        title,
+        specialization,
+        description,
+        contact_info: {
+          address,
+          phone,
+          email,
+        },
+        website,
+        availability: serviceForm.availability,
+        type: serviceForm.type,
+        languages,
+        tags,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabase
+        .from("support_services")
+        .update(payload)
+        .eq("id", selectedService.id)
+        .select(
+          "id,name,type,title,specialization,description,contact_info,website,availability,status,verified,languages,tags,created_at,updated_at"
+        )
+        .single<SupportServiceRow>();
+
+      if (error) throw error;
+
+      const updated = mapSupportRow(data);
+      setSupportServices((prev) => prev.map((svc) => (svc.id === updated.id ? updated : svc)));
+      closeSupportDialog();
+      toast.success("Support service updated.");
+    } catch (err) {
+      console.error("Error updating support service:", err);
+      setSupportError(
+        err instanceof Error ? err.message : "Failed to update the support service. Please try again."
+      );
+      toast.error("Failed to update support service.");
+    } finally {
+      setServiceSaving(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -409,6 +695,72 @@ const Profile = () => {
                   <p className="mt-1">{new Date(member.join_date).toLocaleDateString()}</p>
                 </div>
 
+                <div className="mt-8 space-y-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 className="text-2xl font-bold">My Support Services ({supportServices.length})</h2>
+                    <Button asChild size="sm" variant="outline">
+                      <Link to="/support/apply">Submit new application</Link>
+                    </Button>
+                  </div>
+
+                  {supportLoading ? (
+                    <div className="flex justify-center py-6">
+                      <Loading />
+                    </div>
+                  ) : supportServices.length > 0 ? (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {supportServices.map((service) => (
+                        <div key={service.id} className="rounded-lg border bg-card p-4 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="text-lg font-semibold text-foreground">{service.name}</h3>
+                              <p className="text-sm text-muted-foreground">
+                                {service.title || service.specialization || "Professional"}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant={statusVariant(service.status)}>{humanizeType(service.status)}</Badge>
+                              <Badge variant="outline">{humanizeType(service.availability)}</Badge>
+                              {service.verified && <Badge variant="secondary">Verified</Badge>}
+                            </div>
+                          </div>
+
+                          <p className="mt-3 text-sm text-muted-foreground line-clamp-3">
+                            {service.description || "No description provided yet."}
+                          </p>
+
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>{humanizeType(service.type)}</span>
+                            {service.languages.length > 0 && (
+                              <span>Languages: {service.languages.join(", ")}</span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 text-xs text-muted-foreground">
+                            Last updated {new Date(service.updated_at).toLocaleString()}
+                          </div>
+
+                          <div className="mt-4 flex items-center justify-between">
+                            <div className="text-xs text-muted-foreground">
+                              Contact: {service.contact.email || "—"} | {service.contact.phone || "—"}
+                            </div>
+                            <Button size="sm" variant="outline" onClick={() => openSupportDialog(service)}>
+                              Manage listing
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                      <p>You haven't submitted any support services yet.</p>
+                      <Button asChild className="mt-3">
+                        <Link to="/support/apply">Apply to become a support provider</Link>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-8">
                   <h2 className="mb-4 text-2xl font-bold">My Stories ({stories.length})</h2>
                   {stories.length > 0 ? (
@@ -431,6 +783,194 @@ const Profile = () => {
           </main>
         </div>
       </div>
+      <Dialog open={supportDialogOpen} onOpenChange={(open) => { if (!open) closeSupportDialog(); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Manage Support Service</DialogTitle>
+          </DialogHeader>
+          {selectedService && serviceForm ? (
+            <div className="space-y-5">
+              {supportError && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {supportError}
+                </div>
+              )}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="support-name">Service Name</Label>
+                  <Input
+                    id="support-name"
+                    value={serviceForm.name}
+                    onChange={(e) => handleServiceFormChange("name", e.target.value)}
+                    placeholder="Safe Haven Counseling"
+                    disabled={serviceSaving}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="support-type">Service Type</Label>
+                  <Select
+                    value={serviceForm.type}
+                    onValueChange={(value) => handleServiceFormChange("type", value as ServiceType)}
+                    disabled={serviceSaving}
+                  >
+                    <SelectTrigger id="support-type">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SERVICE_TYPES.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {humanizeType(type)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="support-title">Professional Title</Label>
+                  <Input
+                    id="support-title"
+                    value={serviceForm.title}
+                    onChange={(e) => handleServiceFormChange("title", e.target.value)}
+                    placeholder="Licensed Therapist"
+                    disabled={serviceSaving}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="support-specialization">Specialization</Label>
+                  <Input
+                    id="support-specialization"
+                    value={serviceForm.specialization}
+                    onChange={(e) => handleServiceFormChange("specialization", e.target.value)}
+                    placeholder="Trauma-informed care"
+                    disabled={serviceSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="support-description">Description</Label>
+                <Textarea
+                  id="support-description"
+                  value={serviceForm.description}
+                  onChange={(e) => handleServiceFormChange("description", e.target.value)}
+                  className="min-h-[120px]"
+                  placeholder="Describe the services you provide, including who you support and how to get help."
+                  disabled={serviceSaving}
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="support-availability">Availability</Label>
+                  <Select
+                    value={serviceForm.availability}
+                    onValueChange={(value) => handleServiceFormChange("availability", value as AvailabilityType)}
+                    disabled={serviceSaving}
+                  >
+                    <SelectTrigger id="support-availability">
+                      <SelectValue placeholder="Select availability" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SERVICE_AVAILABILITY.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {humanizeType(option)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="support-website">Website</Label>
+                  <Input
+                    id="support-website"
+                    value={serviceForm.website}
+                    onChange={(e) => handleServiceFormChange("website", e.target.value)}
+                    placeholder="https://example.com"
+                    disabled={serviceSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="support-address">Address</Label>
+                  <Input
+                    id="support-address"
+                    value={serviceForm.address}
+                    onChange={(e) => handleServiceFormChange("address", e.target.value)}
+                    placeholder="123 Safe Street, Freetown"
+                    disabled={serviceSaving}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="support-phone">Phone</Label>
+                  <Input
+                    id="support-phone"
+                    value={serviceForm.phone}
+                    onChange={(e) => handleServiceFormChange("phone", e.target.value)}
+                    placeholder="+23270000000"
+                    disabled={serviceSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="support-email">Contact Email</Label>
+                <Input
+                  id="support-email"
+                  type="email"
+                  value={serviceForm.email}
+                  onChange={(e) => handleServiceFormChange("email", e.target.value)}
+                  placeholder="contact@example.com"
+                  disabled={serviceSaving}
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="support-languages">Languages</Label>
+                  <Input
+                    id="support-languages"
+                    value={serviceForm.languages}
+                    onChange={(e) => handleServiceFormChange("languages", e.target.value)}
+                    placeholder="English, Krio"
+                    disabled={serviceSaving}
+                  />
+                  <p className="text-xs text-muted-foreground">Separate languages with commas.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="support-tags">Tags</Label>
+                  <Input
+                    id="support-tags"
+                    value={serviceForm.tags}
+                    onChange={(e) => handleServiceFormChange("tags", e.target.value)}
+                    placeholder="trauma, legal-aid"
+                    disabled={serviceSaving}
+                  />
+                  <p className="text-xs text-muted-foreground">Keywords help survivors find you.</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={closeSupportDialog} disabled={serviceSaving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSupportSave} disabled={serviceSaving}>
+                  {serviceSaving ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center py-10">
+              <Loading />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       <Footer />
     </>
   );

@@ -132,11 +132,11 @@ const Support = () => {
         // Avoid filtering by status enum value here to prevent enum cast errors if values differ.
         const { data, error } = await supabase
           .from("support_services")
-          .select(
-            "id,name,type,title,specialization,description,contact_info,website,avatar,rating,reviews,verified,availability,status,credentials,languages,tags"
-          )
+          .select("id,name,type,title,specialization,description,contact_info,website,avatar,rating,reviews,verified,availability,status,credentials,languages,tags")
           .eq("verified", true)
+          .eq("status", "approved")
           .order("updated_at", { ascending: false });
+
 
         if (error) throw error;
         setSupportServices((data || []).map(mapRow));
@@ -165,13 +165,11 @@ const Support = () => {
           }
 
           const newRow = payload.new as SupportServiceRow | null;
-          if (!newRow) return;
-
-          // Only keep verified rows in UI
-          if (!newRow.verified) {
-            setSupportServices((prev) => prev.filter((item) => item.id !== newRow.id));
+          if (!newRow || !newRow.verified || newRow.status !== "approved") {
+            setSupportServices((prev) => prev.filter((i) => i.id !== newRow?.id));
             return;
           }
+
 
           const mapped = mapRow(newRow);
 
@@ -597,9 +595,8 @@ const Support = () => {
                           }
                         >
                           <Bookmark
-                            className={`h-4 w-4 ${
-                              isSaved("support", support.id) ? "fill-yellow-500 text-yellow-500" : ""
-                            }`}
+                            className={`h-4 w-4 ${isSaved("support", support.id) ? "fill-yellow-500 text-yellow-500" : ""
+                              }`}
                           />
                         </Button>
                       </div>

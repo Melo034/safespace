@@ -14,6 +14,7 @@ import { Footer } from "@/components/utils/Footer";
 import LiveChat from "@/components/Home/LiveChat";
 import { useNavigate } from "react-router-dom";
 import type { PostgrestError } from "@supabase/supabase-js";
+import { logRecentActivity } from "@/lib/recentActivity";
 
 // DB-allowed values
 const VALID_TYPES = ["lawyer", "therapist", "activist", "support-group"] as const;
@@ -119,12 +120,8 @@ const SupportServiceApplication = () => {
     setIsSubmitting(true);
     try {
       // RLS: writes require authenticated user
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) {
-        toast.error("Please sign in to submit an application.");
-        navigate("/auth/login");
-        return;
-      }
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) { toast.error("Please sign in to submit."); navigate("/auth/login"); return; }
 
       // Build payload aligned to DB columns (let DB defaults fill created_at/updated_at/verified/reviews)
       const payload = {
@@ -147,8 +144,18 @@ const SupportServiceApplication = () => {
         // Do NOT send rating/reviews/verified/avatar unless necessary; DB defaults handle them.
       };
 
-      const { error } = await supabase.from("support_services").insert(payload).select("id").single();
+      const { data: inserted, error } = await supabase
+        .from("support_services")
+        .insert(payload)
+        .select("id,name,status")
+        .single();
       if (error) throw error;
+
+      await logRecentActivity({
+        message: `Support service application submitted: ${inserted?.name ?? payload.name}`,
+        type: "support",
+        status: inserted?.status ?? payload.status,
+      });
 
       toast.success("Application submitted successfully! You'll be notified once reviewed.");
 
@@ -248,7 +255,7 @@ const SupportServiceApplication = () => {
         </div>
 
         {/* Requirements & Status */}
-        <div className="max-w-3xl mx-auto mb-6">
+        <div className="max-w-3xl mx-auto mt-6 mb-6">
           <Card className="mb-4">
             <CardHeader>
               <CardTitle className="text-xl">Requirements Checklist</CardTitle>
