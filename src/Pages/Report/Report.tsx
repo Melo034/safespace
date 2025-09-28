@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import supabase from "@/server/supabase";
-import type { PostgrestError } from "@supabase/supabase-js";
+import type { PostgrestError, User as SupabaseUser } from "@supabase/supabase-js";
 import Navbar from "@/components/utils/Navbar";
 import { Footer } from "@/components/utils/Footer";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Lock, AlertTriangle, FileText, User, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, Eye } from "lucide-react";
+import { Lock, AlertTriangle, FileText, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, Eye, User } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import LiveChat from "@/components/Home/LiveChat";
 import type { ReportType } from "@/lib/types";
@@ -40,6 +40,7 @@ const Report = () => {
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionUser, setSessionUser] = useState<SupabaseUser | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -48,17 +49,22 @@ const Report = () => {
       .getSession()
       .then(({ data }) => {
         if (!active) return;
-        setHasSession(!!data.session?.user);
+        const user = data.session?.user ?? null;
+        setSessionUser(user);
+        setHasSession(!!user);
         setCheckingSession(false);
       })
       .catch(() => {
         if (!active) return;
+        setSessionUser(null);
         setHasSession(false);
         setCheckingSession(false);
       });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setHasSession(!!session?.user);
+      const user = session?.user ?? null;
+      setSessionUser(user);
+      setHasSession(!!user);
       setCheckingSession(false);
     });
 
@@ -93,24 +99,33 @@ const Report = () => {
       : "Submit Report";
 
   /** ---- storage (public bucket 'reports') ---- */
-  const uploadEvidence = async (evidenceFiles: File[]) => {
-    if (!evidenceFiles.length) return [] as string[];
+  const uploadEvidence = useCallback(async (evidenceFiles: File[]): Promise<string[]> => {
+    if (!evidenceFiles.length) return [];
     const bucket = "reports";
-    const prefix = `evidence/${Date.now()}`;
+    const owner = sessionUser?.id ?? "anonymous";
+    const prefix = `${owner}/${Date.now()}`;
 
-    const uploads = evidenceFiles.map(async (file, idx) => {
+    const uploaded: string[] = [];
+
+    for (let idx = 0; idx < evidenceFiles.length; idx += 1) {
+      const file = evidenceFiles[idx];
       const clean = file.name.replace(/[^\w.-]+/g, "_");
       const path = `${prefix}/${idx}_${clean}`;
+
       const { error: uploadError } = await supabase.storage
         .from(bucket)
         .upload(path, file, { cacheControl: "3600", upsert: false });
-      if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
-      return urlData.publicUrl;
-    });
 
-    return Promise.all(uploads);
-  };
+      if (uploadError) {
+        throw new Error(uploadError.message || `Failed to upload ${file.name}`);
+      }
+
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
+      uploaded.push(urlData.publicUrl);
+    }
+
+    return uploaded;
+  }, [sessionUser]);
 
   /** ---- submit ---- */
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -141,17 +156,13 @@ const Report = () => {
 
     setIsSubmitting(true);
     try {
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
-
-      const sessionUser = sessionData.session?.user ?? null;
       if (!sessionUser) {
         toast.error("Please sign in before submitting a report.");
         setIsSubmitting(false);
         return;
       }
 
-      const reportedBy: string | null = isAnonymous ? null : sessionUser.id;
+      const reporterId: string | null = isAnonymous ? null : sessionUser.id;
 
       let evidenceUrls: string[] = [];
       try {
@@ -163,15 +174,14 @@ const Report = () => {
         return;
       }
 
-      const isoIncident =
-        formData.incidentDate ? new Date(formData.incidentDate).toISOString() : new Date().toISOString();
+      const isoIncident = formData.incidentDate
+        ? new Date(formData.incidentDate).toISOString()
+        : new Date().toISOString();
 
-      // Compose a concise title (DB-safe length)
       const todayStr = new Date().toISOString().split("T")[0];
       const baseTitle = `${String(reportType).toUpperCase()} REPORT - ${todayStr}`;
       const title = baseTitle.slice(0, TITLE_MAX);
 
-      // DB-aligned payload for public.reports
       const reportData = {
         title,
         description: [
@@ -185,17 +195,16 @@ const Report = () => {
         ]
           .filter(Boolean)
           .join(""),
-        type: reportType,               // "harassment" | "discrimination" | "violence" | "other"
-        priority: "Low",                // default; admins can escalate
-        status: "Open",                 // "Open" | "In Progress" | "Resolved"
+        type: reportType,
+        priority: "Low",
+        status: "Open",
         location: formData.location,
-        reported_by: reportedBy,        // user id or null (anonymous)
-        reported_at: isoIncident,       // timestamptz
+        reported_by: reporterId,
+        reported_at: isoIncident,
         assigned_to: null as string | null,
-        tags: [reportType, isAnonymous ? "anonymous" : "identified"] as string[],  // text[]
+        tags: [reportType, isAnonymous ? "anonymous" : "identified"] as string[],
         follow_up_actions: formData.supportNeeded ? [formData.supportNeeded] : ([] as string[]),
-        evidence: evidenceUrls,         // text[] of public URLs
-        // created_at/updated_at handled by DB defaults/triggers
+        evidence: evidenceUrls,
       };
 
       const { data: inserted, error } = await supabase
@@ -218,9 +227,8 @@ const Report = () => {
       }
 
       toast.success("Report submitted successfully.");
-      setSubmittedId(inserted?.id || null);
+      setSubmittedId(inserted?.id ?? null);
 
-      // reset
       setFormData({
         firstName: "",
         lastName: "",
@@ -251,7 +259,7 @@ const Report = () => {
 
       const lower = String(message).toLowerCase();
       if (lower.includes("row-level security") || code === "42501") {
-        toast.error("Insert blocked by RLS. Allow inserts to 'reports' (e.g., authenticated users or anonymous with reported_by IS NULL).");
+        toast.error("Insert blocked by RLS. Ensure authenticated users can insert into 'reports'.");
       } else if (code === "23502") {
         toast.error("Missing required field. Check NOT NULL columns.");
       } else if (code === "22P02") {
@@ -791,3 +799,6 @@ const Dropzone = ({ files, onDrop, onRemove, onClear, disabled = false, inactive
     </div>
   );
 };
+
+
+

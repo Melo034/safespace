@@ -1,5 +1,6 @@
 // src/pages/admin/CommunityManagement.tsx
 import { useEffect, useMemo, useState } from "react";
+import type { PostgrestError } from "@supabase/supabase-js";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import supabase from "@/server/supabase";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -83,6 +84,25 @@ type CommunityMemberRow = {
     | null;
 };
 
+const COMMUNITY_STATUS_VALUES: CommunityStatus[] = ["active", "warned", "suspended", "banned"];
+
+const MODERATION_TO_STATUS: Record<"warn" | "suspend" | "ban" | "activate", CommunityStatus> = {
+  warn: "warned",
+  suspend: "suspended",
+  ban: "banned",
+  activate: "active",
+};
+
+const STATUS_LABELS: Record<CommunityStatus, string> = {
+  active: "Active",
+  warned: "Warned",
+  suspended: "Suspended",
+  banned: "Banned",
+};
+
+const normalizeStatus = (value: string | null): CommunityStatus =>
+  COMMUNITY_STATUS_VALUES.includes(value as CommunityStatus) ? (value as CommunityStatus) : "active";
+
 /** Validation */
 const moderationSchema = z.object({
   reason: z.string().min(5).max(500),
@@ -156,7 +176,7 @@ const CommunityManagement = () => {
           name: d.name ?? "Anonymous",
           email: d.email ?? "",
           username: d.username ?? "",
-          status: (d.status ?? "active") as CommunityStatus,
+          status: normalizeStatus(d.status),
           join_date: d.join_date ?? new Date().toISOString(),
           last_active: d.last_active ?? new Date().toISOString(),
           avatar: d.avatar_url ?? undefined,
@@ -233,34 +253,28 @@ const CommunityManagement = () => {
     try {
       setLoading(true);
 
-      const nextStatus: CommunityStatus =
-        moderationAction === "activate"
-          ? "active"
-          : moderationAction === "warn"
-          ? "warned"
-          : moderationAction === "suspend"
-          ? "suspended"
-          : "banned";
+      const nextStatus = MODERATION_TO_STATUS[moderationAction];
 
-      const newViolation: CommunityMember["violations"][number] =
-        moderationAction === "activate"
-          ? // no new violation on activate
-            undefined!
-          : {
-              type:
-                moderationAction === "ban"
-                  ? "hate_speech"
-                  : moderationAction === "suspend"
-                  ? "inappropriate_content"
-                  : "harassment",
-              date: new Date().toISOString(),
-              description: moderationReason,
-            };
+      const currentViolations = Array.isArray(selectedMember.violations)
+        ? selectedMember.violations
+        : [];
 
       const updatedViolations: CommunityMember["violations"] =
         moderationAction === "activate"
-          ? selectedMember.violations
-          : [...selectedMember.violations, newViolation];
+          ? currentViolations
+          : [
+              ...currentViolations,
+              {
+                type:
+                  moderationAction === "ban"
+                    ? "hate_speech"
+                    : moderationAction === "suspend"
+                    ? "inappropriate_content"
+                    : "harassment",
+                date: new Date().toISOString(),
+                description: moderationReason,
+              },
+            ];
 
       const nextReports =
         moderationAction === "activate"
@@ -273,10 +287,19 @@ const CommunityManagement = () => {
           status: nextStatus,
           violations: updatedViolations,
           reports_count: nextReports,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", selectedMember.id);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Moderation update failed", error, {
+          memberId: selectedMember.id,
+          nextStatus,
+          nextReports,
+          violationsCount: updatedViolations.length,
+        });
+        throw error;
+      }
 
       setMembers((prev) =>
         prev.map((m) =>
@@ -291,14 +314,31 @@ const CommunityManagement = () => {
         )
       );
 
+      setSelectedMember((prev) =>
+        prev && prev.id === selectedMember.id
+          ? {
+              ...prev,
+              status: nextStatus,
+              violations: updatedViolations,
+              reports_count: nextReports,
+            }
+          : prev
+      );
+
       setIsModerationDialogOpen(false);
       setModerationReason("");
       toast.success(
         moderationAction === "activate" ? "Member activated" : `Member ${moderationAction}ed`
       );
     } catch (e) {
-      console.error(e);
-      toast.error("Failed to apply moderation action.");
+      const err = e as PostgrestError | Error;
+      if ("code" in (err ?? {})) {
+        console.error("Failed to apply moderation action", err);
+        toast.error(err.message ?? "Failed to apply moderation action.");
+      } else {
+        console.error("Failed to apply moderation action", err);
+        toast.error(err instanceof Error ? err.message : "Failed to apply moderation action.");
+      }
     } finally {
       setLoading(false);
     }
@@ -510,7 +550,7 @@ const CommunityManagement = () => {
                             </TableCell>
                             <TableCell>
                               <Badge className={getStatusColor(member.status)}>
-                                {member.status}
+                                {STATUS_LABELS[member.status]}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -645,7 +685,7 @@ const CommunityManagement = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <InfoCell label="Status">
                       <Badge className={getStatusColor(selectedMember.status)}>
-                        {selectedMember.status}
+                        {STATUS_LABELS[selectedMember.status]}
                       </Badge>
                     </InfoCell>
                     <InfoCell label="Location">

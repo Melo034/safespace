@@ -2,12 +2,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import supabase from "@/server/supabase";
-import { Camera } from "lucide-react";
+import { Camera, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,6 +25,14 @@ import type { Story } from "@/lib/types";
  *  - community_members.email is NOT NULL in DB → keep as string (no null)
  *  - Only select / write columns that exist in your schema
  *  ────────────────────────────────────────────────────────────────────────────*/
+type CommunityStatus = "active" | "warned" | "suspended" | "banned";
+
+type MemberViolation = {
+  type: "hate_speech" | "harassment" | "inappropriate_content" | "spam";
+  date: string;
+  description: string;
+};
+
 type CommunityMember = {
   user_id: string;
   name: string;
@@ -32,6 +41,8 @@ type CommunityMember = {
   bio: string | null;
   stories_count: number;
   join_date: string;
+  status: CommunityStatus;
+  violations: MemberViolation[];
 };
 
 type CommunityMemberRow = {
@@ -42,7 +53,65 @@ type CommunityMemberRow = {
   bio: string | null;
   stories_count: number | null;
   join_date: string | null;
+  status: CommunityStatus | null;
+  violations: MemberViolation[] | null;
 };
+
+const COMMUNITY_STATUS_VALUES: CommunityStatus[] = ["active", "warned", "suspended", "banned"];
+
+const COMMUNITY_STATUS_LABELS: Record<CommunityStatus, string> = {
+  active: "Active",
+  warned: "Warned",
+  suspended: "Suspended",
+  banned: "Banned",
+};
+
+const statusBadgeClass = (status: CommunityStatus) => {
+  switch (status) {
+    case "active":
+      return "bg-green-100 text-green-700";
+    case "warned":
+      return "bg-yellow-100 text-yellow-800";
+    case "suspended":
+      return "bg-orange-100 text-orange-800";
+    case "banned":
+    default:
+      return "bg-red-100 text-red-800";
+  }
+};
+
+const getModerationNotice = (member: CommunityMember) => {
+  if (member.status !== "warned" && member.status !== "suspended") return null;
+
+  const latest = member.violations.length ? member.violations[member.violations.length - 1] : null;
+  const formattedDate = latest?.date ? new Date(latest.date).toLocaleDateString() : null;
+  const reason = latest?.description?.trim() ? latest.description.trim() : null;
+
+  if (member.status === "warned") {
+    return {
+      variant: "default" as const,
+      className: "border-yellow-300 bg-yellow-50 text-yellow-900 [&>svg]:text-yellow-600",
+      title: "Account Warning",
+      description: formattedDate
+        ? `You received a warning on ${formattedDate}.`
+        : "You currently have an active warning on your account.",
+      reason,
+    };
+  }
+
+  return {
+    variant: "destructive" as const,
+    className: "border-red-300 bg-red-50 text-red-900 [&>svg]:text-red-600",
+    title: "Account Suspended",
+    description: formattedDate
+      ? `Your account was suspended on ${formattedDate}.`
+      : "Your account is currently suspended.",
+    reason,
+  };
+};
+
+const normalizeStatus = (status: string | null): CommunityStatus =>
+  COMMUNITY_STATUS_VALUES.includes(status as CommunityStatus) ? (status as CommunityStatus) : "active";
 
 function mapRowToMember(row: CommunityMemberRow): CommunityMember {
   return {
@@ -53,6 +122,8 @@ function mapRowToMember(row: CommunityMemberRow): CommunityMember {
     bio: row.bio ?? null,
     stories_count: row.stories_count ?? 0,
     join_date: row.join_date ?? new Date().toISOString(),
+    status: normalizeStatus(row.status ?? null),
+    violations: Array.isArray(row.violations) ? row.violations : [],
   };
 }
 
@@ -261,7 +332,7 @@ const Profile = () => {
         // 1) Get or create community member profile (RLS: *_self policies)
         const { data: profileRow, error: profileErr } = await supabase
           .from("community_members")
-          .select("user_id,name,email,avatar_url,bio,stories_count,join_date")
+          .select("user_id,name,email,avatar_url,bio,stories_count,join_date,status,violations")
           .eq("user_id", user.id)
           .maybeSingle<CommunityMemberRow>();
         if (profileErr) throw profileErr;
@@ -281,7 +352,7 @@ const Profile = () => {
           const { data: inserted, error: insertErr } = await supabase
             .from("community_members")
             .insert(insertPayload)
-            .select("user_id,name,email,avatar_url,bio,stories_count,join_date")
+            .select("user_id,name,email,avatar_url,bio,stories_count,join_date,status,violations")
             .single<CommunityMemberRow>();
 
           if (insertErr) throw insertErr;
@@ -605,6 +676,10 @@ const Profile = () => {
 
   if (!member) return null;
 
+  const moderationNotice = getModerationNotice(member);
+  const statusLabel = COMMUNITY_STATUS_LABELS[member.status];
+  const statusToneClass = statusBadgeClass(member.status);
+
   return (
     <>
       <Navbar />
@@ -620,6 +695,17 @@ const Profile = () => {
                 </Button>
               )}
             </div>
+
+            {moderationNotice && (
+              <Alert variant={moderationNotice.variant} className={`mb-6 ${moderationNotice.className}`}>
+                <AlertTriangle />
+                <AlertTitle>{moderationNotice.title}</AlertTitle>
+                <AlertDescription>
+                  <p>{moderationNotice.description}</p>
+                  {moderationNotice.reason && <p className="text-sm">Reason: {moderationNotice.reason}</p>}
+                </AlertDescription>
+              </Alert>
+            )}
 
             {isEditing ? (
               <form onSubmit={handleSave} className="space-y-6">
@@ -671,6 +757,15 @@ const Profile = () => {
                       aria-required="true"
                     />
                   </div>
+                  <div className="space-y-1 md:col-span-2">
+                    <Label>Account Status</Label>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className={`${statusToneClass} border-transparent`}>
+                        {statusLabel}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">Status is managed by SafeSpace moderators.</span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -715,6 +810,14 @@ const Profile = () => {
                   <div>
                     <h3 className="text-sm font-medium text-gray-500">Email</h3>
                     <p className="mt-1">{member.email}</p>
+                  </div>
+                  <div className="md:col-span-2">
+                    <h3 className="text-sm font-medium text-gray-500">Account Status</h3>
+                    <div className="mt-1 flex items-center gap-2">
+                      <Badge variant="outline" className={`${statusToneClass} border-transparent`}>
+                        {statusLabel}
+                      </Badge>
+                    </div>
                   </div>
                 </div>
 

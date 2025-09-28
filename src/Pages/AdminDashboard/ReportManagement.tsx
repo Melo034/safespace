@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertTriangle,
   Eye,
@@ -65,6 +65,21 @@ type UiReport = {
   created_at: string;
   updated_at: string;
 };
+
+interface AdminOption {
+  user_id: string;
+  name: string;
+  role: string;
+}
+
+const formatRoleLabel = (role: string) =>
+  role
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+const UNASSIGNED_OPTION = "__unassigned__";
 
 const toUi = (r: DbReportRow): UiReport => ({
   id: r.id,
@@ -123,6 +138,12 @@ const ReportManagement = () => {
   const [selectedReport, setSelectedReport] = useState<UiReport | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UiReport | null>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [adminOptions, setAdminOptions] = useState<AdminOption[]>([]);
+  const [adminsLoading, setAdminsLoading] = useState(true);
+  const [adminsError, setAdminsError] = useState<string | null>(null);
 
   // load + realtime
   useEffect(() => {
@@ -214,6 +235,60 @@ const ReportManagement = () => {
     };
   }, [sessionLoading]);
 
+  useEffect(() => {
+    if (sessionLoading) return;
+    let active = true;
+
+    const loadAdmins = async () => {
+      try {
+        setAdminsLoading(true);
+        setAdminsError(null);
+        const { data, error } = await supabase
+          .from("admin_members")
+          .select("user_id,name,role,status")
+          .eq("status", "active")
+          .order("name", { ascending: true });
+        if (error) throw error;
+        if (!active) return;
+        const options = (data ?? [])
+                  .filter(
+                    (row): row is { user_id: string; name: string | null; role: string | null; status: string | null } =>
+                      !!row?.user_id
+                  )
+                  .map((row) => ({
+            user_id: row.user_id,
+            name: row.name ?? "Admin",
+            role: row.role ?? "admin",
+          }));
+        setAdminOptions(options);
+      } catch (err) {
+        console.error("Failed to load admins", err);
+        if (active) setAdminsError("Unable to load admin list.");
+      } finally {
+        if (active) setAdminsLoading(false);
+      }
+    };
+
+    loadAdmins();
+    return () => {
+      active = false;
+    };
+  }, [sessionLoading]);
+
+  const adminLookup = useMemo(() => {
+    const map: Record<string, AdminOption> = {};
+    for (const option of adminOptions) {
+      map[option.user_id] = option;
+    }
+    return map;
+  }, [adminOptions]);
+
+  const getAssigneeLabel = (id: string | null) => {
+    if (!id) return "Unassigned";
+    const option = adminLookup[id];
+    return option ? `${option.name} (${formatRoleLabel(option.role)})` : id;
+  };
+
   const filtered = useMemo(() => {
     const q = searchTerm.toLowerCase();
     return reports.filter((r) => {
@@ -261,15 +336,31 @@ const ReportManagement = () => {
     setIsViewDialogOpen(true);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Delete this report")) return;
+  const openDeleteDialog = (report: UiReport) => {
+    setDeleteTarget(report);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDeleteDialogOpenChange = (open: boolean) => {
+    setIsDeleteDialogOpen(open);
+    if (!open) {
+      setDeleteTarget(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      const { error } = await supabase.from("reports").delete().eq("id", id);
+      setIsDeleting(true);
+      const { error } = await supabase.from("reports").delete().eq("id", deleteTarget.id);
       if (error) throw error;
       toast.success("Report deleted");
+      handleDeleteDialogOpenChange(false);
     } catch (e) {
       console.error(e);
       toast.error("Failed to delete report.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -320,13 +411,13 @@ const ReportManagement = () => {
             {(() => {
               const open = reports.filter((r) => r.status === "Open").length;
               const inprog = reports.filter((r) => r.status === "In Progress").length;
-              const critical = reports.filter((r) => r.priority === "Critical").length;
+              const highPriority = reports.filter((r) => r.priority === "High" || r.priority === "Critical").length;
               const resolved = reports.filter((r) => r.status === "Resolved").length;
               const pluralize = (n: number, s: string, p: string) => (n === 1 ? s : p);
               const stats = [
                 { title: pluralize(open, "Open Case", "Open Cases"), value: open, description: open === 0 ? "No open cases" : `${open} open cases`, icon: AlertTriangle, bgColor: "bg-red-100", color: "text-red-600" },
                 { title: "In-progress", value: inprog, description: inprog === 0 ? "No reports under review" : `${inprog} reports under review`, icon: MessageSquare, bgColor: "bg-blue-100", color: "text-blue-600" },
-                { title: "Critical", value: critical, description: critical === 0 ? "No high-priority incidents" : `${critical} high-priority incidents`, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
+                { title: "High Priority", value: highPriority, description: highPriority === 0 ? "No high-priority incidents" : `${highPriority} high-priority incidents`, icon: AlertTriangle, bgColor: "bg-orange-100", color: "text-orange-600" },
                 { title: pluralize(resolved, "Resolved Case", "Resolved Cases"), value: resolved, description: resolved === 0 ? "No closed cases" : `${resolved} closed cases`, icon: AlertTriangle, bgColor: "bg-green-100", color: "text-green-600" },
               ];
               return stats.map((s) => <StatCard key={s.title} {...s} />);
@@ -425,7 +516,7 @@ const ReportManagement = () => {
                       <Button variant="outline" size="sm" className="rounded-full" onClick={() => handleEdit(r)}>
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="sm" className="rounded-full" onClick={() => handleDelete(r.id)}>
+                      <Button variant="outline" size="sm" className="rounded-full" onClick={() => openDeleteDialog(r)}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
@@ -447,6 +538,7 @@ const ReportManagement = () => {
             <DialogContent className="max-w-2xl rounded-xl">
               <DialogHeader>
                 <DialogTitle>Report Details</DialogTitle>
+                <DialogDescription>Comprehensive information about the selected report.</DialogDescription>
               </DialogHeader>
               {selectedReport && (
                 <div className="space-y-4">
@@ -481,7 +573,7 @@ const ReportManagement = () => {
                     </div>
                     <div>
                       <label className="text-sm font-medium">Assigned To</label>
-                      <p className="text-sm text-muted-foreground">{selectedReport.assigned_to ?? "Unassigned"}</p>
+                      <p className="text-sm text-muted-foreground">{getAssigneeLabel(selectedReport.assigned_to)}</p>
                     </div>
                   </div>
 
@@ -516,11 +608,56 @@ const ReportManagement = () => {
             </DialogContent>
           </Dialog>
 
+          {/* Delete confirmation dialog */}
+          <Dialog open={isDeleteDialogOpen} onOpenChange={handleDeleteDialogOpenChange}>
+            <DialogContent className="max-w-md rounded-xl">
+              <DialogHeader>
+                <DialogTitle>Delete Report</DialogTitle>
+                <DialogDescription>This action permanently removes the report and its related records.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="flex items-start gap-3 rounded-md border border-border/60 bg-destructive/5 p-3">
+                  <AlertTriangle className="mt-1 h-5 w-5 text-destructive" />
+                  <p className="text-sm text-muted-foreground">
+                    You're about to remove <span className="font-medium text-foreground">{deleteTarget?.title || "this report"}</span>. This action cannot be undone.
+                  </p>
+                </div>
+                {deleteTarget ? (
+                  <div className="rounded-md border border-border/60 bg-muted/40 p-3 text-sm text-muted-foreground">
+                    <p>
+                      <span className="font-medium text-foreground">Type:</span> {deleteTarget.type}
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">Priority:</span> {deleteTarget.priority}
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">Status:</span> {deleteTarget.status}
+                    </p>
+                  </div>
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleDeleteDialogOpenChange(false)}
+                    disabled={isDeleting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="button" variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+                    {isDeleting ? "Deleting..." : "Delete"}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
           {/* Edit dialog */}
           <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
             <DialogContent className="max-w-2xl rounded-xl">
               <DialogHeader>
                 <DialogTitle>Edit Report</DialogTitle>
+                <DialogDescription>Update the report's priority, status, and assignee.</DialogDescription>
               </DialogHeader>
               {selectedReport && (
                 <form
@@ -572,17 +709,32 @@ const ReportManagement = () => {
                   </div>
 
                   <div>
-                    <label className="text-sm font-medium mb-2 block">Assigned To (uuid)</label>
-                    <Input
-                      value={selectedReport.assigned_to ?? ""}
-                      onChange={(e) =>
+                    <label className="text-sm font-medium mb-2 block">Assignee</label>
+                    <Select
+                      value={selectedReport.assigned_to ?? UNASSIGNED_OPTION}
+                      onValueChange={(value) =>
                         setSelectedReport({
                           ...selectedReport,
-                          assigned_to: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                          assigned_to: value === UNASSIGNED_OPTION ? null : value,
                         })
                       }
-                      placeholder="leave empty for unassigned"
-                    />
+                      disabled={adminsLoading}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={adminsLoading ? "Loading admins..." : "Select assignee"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={UNASSIGNED_OPTION}>Unassigned</SelectItem>
+                        {adminOptions.map((option) => (
+                          <SelectItem key={option.user_id} value={option.user_id}>
+                            {option.name} ({formatRoleLabel(option.role)})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {adminsError ? (
+                      <p className="text-xs text-destructive mt-1">{adminsError}</p>
+                    ) : null}
                   </div>
 
                   <div className="flex justify-end gap-2">
@@ -602,3 +754,4 @@ const ReportManagement = () => {
 };
 
 export default ReportManagement;
+
