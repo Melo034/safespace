@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Lock, AlertTriangle, FileText, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, Eye, User } from "lucide-react";
+import { Lock, AlertTriangle, FileText, Mail, Phone as PhoneIcon, Calendar, MapPin, ShieldCheck, Upload, X, User } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import LiveChat from "@/components/Home/LiveChat";
 import type { ReportType } from "@/lib/types";
@@ -345,33 +345,6 @@ return (
           </CardContent>
         </Card>
 
-        {/* Anonymity Preview */}
-        <Card className="mb-6">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <Eye className="h-5 w-5 text-primary mt-0.5" />
-              <div className="text-sm text-muted-foreground">
-                <p className="mb-1"><span className="font-medium text-foreground">Data preview:</span> {isAnonymous ? "Anonymous" : "Identified"} submission</p>
-                <ul className="list-disc list-inside space-y-1">
-                  {isAnonymous ? (
-                    <>
-                      <li>No name, email, or phone stored</li>
-                      <li>Incident details, date, and location stored</li>
-                      <li>Evidence file links stored if uploaded</li>
-                    </>
-                  ) : (
-                    <>
-                      <li>Contact info stored with report</li>
-                      <li>Incident details, date, and location stored</li>
-                      <li>Evidence file links stored if uploaded</li>
-                    </>
-                  )}
-                </ul>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         <Card className="border-green-200/60 bg-green-50/70 dark:bg-emerald-950/20 mb-8">
           <CardContent className="pt-6">
             <div className="flex items-start space-x-3">
@@ -430,20 +403,6 @@ return (
               </div>
             )}
             <form id="report-form" onSubmit={handleSubmit} className="space-y-8">
-              <div className="space-y-3">
-                <Label htmlFor="anonymous" className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    id="anonymous"
-                    checked={isAnonymous}
-                    onCheckedChange={(checked) => setIsAnonymous(Boolean(checked))}
-                  />
-                  Submit Anonymously
-                  <Lock className="h-4 w-4 text-muted-foreground" />
-                </Label>
-                <p className="text-xs text-muted-foreground">Signing in lets us protect the upload process, but we still won't attach your identity if you choose to remain anonymous.</p>
-              </div>
-
-              {!isAnonymous && (
                 <div>
                   <h3 className="text-sm font-medium text-muted-foreground mb-3">Your Details</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -506,8 +465,6 @@ return (
                     </div>
                   </div>
                 </div>
-              )}
-
               <div className="space-y-2">
                 <Label htmlFor="reportType">Incident Type <span className="text-destructive">*</span></Label>
                 <Select value={reportType} onValueChange={(value) => setReportType(value as ReportType["type"] | "")}>
