@@ -19,7 +19,6 @@ import { toast } from "sonner";
 const TITLE_MAX = 140;
 
 const Report = () => {
-  const [isAnonymous, setIsAnonymous] = useState(false);
   const [reportType, setReportType] = useState<ReportType["type"] | "">("");
   const [formData, setFormData] = useState({
     firstName: "",
@@ -98,11 +97,13 @@ const Report = () => {
       ? "Submitting..."
       : "Submit Report";
 
+  const reporterId = sessionUser?.id ?? null;
+
   /** ---- storage (public bucket 'reports') ---- */
   const uploadEvidence = useCallback(async (evidenceFiles: File[]): Promise<string[]> => {
     if (!evidenceFiles.length) return [];
     const bucket = "reports";
-    const owner = sessionUser?.id ?? "anonymous";
+    const owner = sessionUser?.id ?? "unknown-owner";
     const prefix = `${owner}/${Date.now()}`;
 
     const uploaded: string[] = [];
@@ -147,12 +148,6 @@ const Report = () => {
       toast.warning("Please provide the incident date and location.");
       return;
     }
-    if (!isAnonymous) {
-      if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.email.trim()) {
-        toast.warning("Please provide your first name, last name, and email or submit anonymously.");
-        return;
-      }
-    }
 
     setIsSubmitting(true);
     try {
@@ -162,7 +157,6 @@ const Report = () => {
         return;
       }
 
-      const reporterId: string | null = isAnonymous ? null : sessionUser.id;
 
       let evidenceUrls: string[] = [];
       try {
@@ -189,9 +183,7 @@ const Report = () => {
           formData.perpetratorName ? `\nPerpetrator: ${formData.perpetratorName}` : "",
           formData.relationship ? `\nRelationship: ${formData.relationship}` : "",
           formData.supportNeeded ? `\nSupport needed: ${formData.supportNeeded}` : "",
-          !isAnonymous
-            ? `\nReporter: ${formData.firstName} ${formData.lastName} | ${formData.email} | ${formData.phone || ""}`
-            : "",
+          `\nReporter: ${formData.firstName} ${formData.lastName} | ${formData.email} | ${formData.phone || ""}`,
         ]
           .filter(Boolean)
           .join(""),
@@ -202,7 +194,7 @@ const Report = () => {
         reported_by: reporterId,
         reported_at: isoIncident,
         assigned_to: null as string | null,
-        tags: [reportType, isAnonymous ? "anonymous" : "identified"] as string[],
+        tags: [reportType, "identified"] as string[],
         follow_up_actions: formData.supportNeeded ? [formData.supportNeeded] : ([] as string[]),
         evidence: evidenceUrls,
       };
@@ -245,7 +237,6 @@ const Report = () => {
       });
       setFiles([]);
       setReportType("");
-      setIsAnonymous(false);
     } catch (err: unknown) {
       const asPg = err as Partial<PostgrestError> | undefined;
       const code = asPg?.code ?? "";
@@ -340,7 +331,7 @@ return (
             <ul className="list-disc list-inside space-y-1">
               <li>Use clear, factual language about what happened (who, what, when, where).</li>
               <li>For evidence, upload photos or PDFs up to 10MB each; avoid sharing files you’re not ready to disclose.</li>
-              <li>You can submit anonymously or provide contact info if you want follow‑up support.</li>
+              <li>Include accurate contact details so support teams can reach you quickly if needed.</li>
             </ul>
           </CardContent>
         </Card>
@@ -353,7 +344,7 @@ return (
                 <h3 className="font-semibold text-emerald-900 dark:text-emerald-300 mb-2">Your report is protected</h3>
                 <ul className="text-sm text-emerald-800/90 dark:text-emerald-200/90 space-y-1">
                   <li>• Encrypted storage and restricted access</li>
-                  <li>• Option to stay anonymous</li>
+                  <li>• Confidential handling by our support team</li>
                   <li>• Only authorized support can view</li>
                   <li>• You decide what to share</li>
                 </ul>
@@ -398,7 +389,7 @@ return (
                 <AlertTriangle className="mt-0.5 h-4 w-4" />
                 <div>
                   <p className="font-medium">Sign in required</p>
-                  <p>Sign in to securely upload evidence and submit a report. You can still hide your identity by selecting the anonymous option.</p>
+                  <p>Sign in to securely upload evidence and submit a report. Your signed-in account keeps your report linked for confidential follow-up.</p>
                 </div>
               </div>
             )}
@@ -490,7 +481,7 @@ return (
                   required
                   rows={5}
                 />
-                <p className="text-xs text-muted-foreground">Avoid sharing sensitive details that could reveal your identity if you prefer anonymity.</p>
+                <p className="text-xs text-muted-foreground">Avoid sharing sensitive details you are not ready to disclose.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
